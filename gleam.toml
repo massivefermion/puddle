@@ -1,0 +1,14 @@
+description = "A Gleam project"
+name = "puddle"
+version = "0.1.0"
+
+licences = ["Apache-2.0"]
+links = [{title = "gleam", href = "https://gleam.run"}]
+repository = {type = "github", user = "massivefermion", repo = "puddle"}
+
+[dependencies]
+gleam_otp = "~> 0.5"
+gleam_stdlib = "~> 0.28"
+
+[dev-dependencies]
+gleeunit = "~> 0.10"

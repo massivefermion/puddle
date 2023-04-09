@@ -1,5 +1,9 @@
+import gleam/io
 import gleam/list
 import gleam/queue
+import gleam/result
+import gleam/otp/task
+import gleam/otp/port
 import gleam/otp/actor
 import gleam/erlang/process
 
@@ -21,7 +25,8 @@ pub fn new(
 ) -> process.Subject(Message(resource_type, result_type)) {
   let assert Ok(actor) =
     actor.start(
-      list.repeat(new_resource(), size)
+      list.repeat("", size)
+      |> list.map(fn(_) { new_resource() })
       |> queue.from_list
       |> Puddle,
       fn(
@@ -74,10 +79,72 @@ fn use_one_and_return(
   case checkout(puddle) {
     Ok(#(resource, puddle)) -> {
       let result = func(resource)
-      process.sleep(5000)
+      process.sleep(2500)
       let puddle = put_back(puddle, resource)
       Ok(#(result, puddle))
     }
     Error(Nil) -> Error(Nil)
   }
 }
+
+pub type Command {
+  Command(String)
+}
+
+pub type Data {
+  Data(String)
+}
+
+pub fn main() {
+  let puddle = new(128, fn() { start_port("cat") })
+  inner(puddle, [], 32)
+  |> list.map(fn(t) { task.await(t, 6000) })
+  |> io.debug
+}
+
+pub fn inner(
+  puddle,
+  tasks: List(
+    task.Task(
+      List(Result(Result(Nil, Nil), process.CallError(Result(Nil, Nil)))),
+    ),
+  ),
+  counter: Int,
+) -> List(
+  task.Task(List(Result(Result(Nil, Nil), process.CallError(Result(Nil, Nil))))),
+) {
+  case counter {
+    0 -> tasks
+    _ ->
+      inner(
+        puddle,
+        list.append(
+          tasks,
+          [
+            task.async(fn() {
+              list.repeat(
+                process.try_call(
+                  puddle,
+                  fn(self) {
+                    Utilize(
+                      fn(port) { send_to_port(port, Command("hello")) },
+                      self,
+                    )
+                  },
+                  5000,
+                ),
+                8,
+              )
+            }),
+          ],
+        ),
+        counter - 1,
+      )
+  }
+}
+
+external fn start_port(String) -> port.Port =
+  "puddle_ffi" "start_port"
+
+external fn send_to_port(port.Port, Command) -> Nil =
+  "puddle_ffi" "send_to_port"

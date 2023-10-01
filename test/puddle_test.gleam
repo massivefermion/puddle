@@ -66,7 +66,12 @@ pub fn parallel_test() {
   process.select(selector, 32)
   |> should.be_ok
 
+  let _ =
+    puddle.checkout(puddle)
+    |> should.be_error
+
   let puddle = puddle.put_back(puddle, sub1_id)
+
   let _ =
     puddle.checkout(puddle)
     |> should.be_ok

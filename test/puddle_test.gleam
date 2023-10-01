@@ -28,11 +28,11 @@ pub fn parallel_test() {
     puddle.checkout(puddle)
     |> should.be_ok
 
-  let #(#(sub2_id, sub2), puddle) =
+  let #(#(_sub2_id, sub2), puddle) =
     puddle.checkout(puddle)
     |> should.be_ok
 
-  let #(#(sub3_id, sub3), puddle) =
+  let #(#(_sub3_id, sub3), puddle) =
     puddle.checkout(puddle)
     |> should.be_ok
 
@@ -66,9 +66,10 @@ pub fn parallel_test() {
   process.select(selector, 32)
   |> should.be_ok
 
-  puddle.put_back(puddle, sub1_id)
-  puddle.put_back(puddle, sub2_id)
-  puddle.put_back(puddle, sub3_id)
+  let puddle = puddle.put_back(puddle, sub1_id)
+  let _ =
+    puddle.checkout(puddle)
+    |> should.be_ok
 
   let content =
     file.read(test_output)

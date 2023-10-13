@@ -4,8 +4,8 @@ import gleam/string
 import puddle
 import gleeunit
 import gleeunit/should
+import gleam/otp/task
 import gleam/erlang/file
-import gleam/erlang/process
 
 pub fn main() {
   gleeunit.main()
@@ -15,7 +15,7 @@ pub const test_output = "test_output"
 
 pub fn parallel_test() {
   let manager =
-    puddle.start_manager(
+    puddle.start(
       3,
       fn() {
         int.random(1024, 8192)
@@ -32,51 +32,50 @@ pub fn parallel_test() {
     n_str
   }
 
-  let sub1 =
-    process.call(manager, puddle.Checkout, 32)
-    |> should.be_ok
+  let t1 =
+    task.async(fn() {
+      use r <- puddle.apply(manager, fun, 32)
+      r
+    })
 
-  let sub2 =
-    process.call(manager, puddle.Checkout, 32)
-    |> should.be_ok
+  let t2 =
+    task.async(fn() {
+      use r <- puddle.apply(manager, fun, 32)
+      r
+    })
 
-  let sub3 =
-    process.call(manager, puddle.Checkout, 32)
-    |> should.be_ok
+  let t3 =
+    task.async(fn() {
+      use r <- puddle.apply(manager, fun, 32)
+      r
+    })
 
-  let mine = process.new_subject()
+  let t4 =
+    task.async(fn() {
+      use r <- puddle.apply(manager, fun, 32)
+      r
+    })
 
-  sub1
-  |> process.send(puddle.UsageMessage(fun, mine))
-
-  sub2
-  |> process.send(puddle.UsageMessage(fun, mine))
-
-  sub3
-  |> process.send(puddle.UsageMessage(fun, mine))
-
-  let selector =
-    process.new_selector()
-    |> process.selecting(mine, fn(r) { r })
-
-  process.select(selector, 32)
+  task.await(t1, 32)
   |> should.be_ok
 
-  process.select(selector, 32)
+  task.await(t2, 32)
   |> should.be_ok
 
-  process.select(selector, 32)
+  task.await(t3, 32)
   |> should.be_ok
 
-  let _ =
-    process.call(manager, puddle.Checkout, 32)
-    |> should.be_error
+  task.await(t4, 32)
+  |> should.be_error
 
-  process.send(manager, puddle.PutBack(sub1))
+  let t =
+    task.async(fn() {
+      use r <- puddle.apply(manager, fun, 32)
+      r
+    })
 
-  let _ =
-    process.call(manager, puddle.Checkout, 32)
-    |> should.be_ok
+  task.await(t, 32)
+  |> should.be_ok
 
   let content =
     file.read(test_output)
@@ -111,4 +110,6 @@ pub fn parallel_test() {
   chains
   |> list.any(fn(chain) { list.length(chain) < 3 })
   |> should.be_true
+
+  Ok(Nil)
 }

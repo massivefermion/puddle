@@ -41,7 +41,7 @@ pub fn start(
   actor.start(puddle, handle_bookkeeping_message)
 }
 
-/// checks-out a resources, applies the function and then checks-in the resource
+/// checks-out a resource, applies the function and then checks-in the resource
 ///
 /// ## Example
 ///

@@ -1,7 +1,9 @@
-# puddle
+![puddle](https://raw.githubusercontent.com/massivefermion/puddle/main/logo.png)
 
 [![Package Version](https://img.shields.io/hexpm/v/puddle)](https://hex.pm/packages/puddle)
 [![Hex Docs](https://img.shields.io/badge/hex-docs-ffaff3)](https://hexdocs.pm/puddle/)
+
+# puddle
 
 A resource pool manager for gleam
 

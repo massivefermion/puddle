@@ -41,6 +41,34 @@ pub fn start(
   actor.start(puddle, handle_bookkeeping_message)
 }
 
+/// checks-out a resources, applies the function and then checks-in the resource
+///
+/// ## Example
+///
+/// ```gleam
+/// >  let assert Ok(manager) =
+/// >    puddle.start(
+/// >      4,
+/// >      fn() {
+/// >        Ok(int.random(1024, 8192))
+/// >      },
+/// >    )
+/// >
+/// >  let t1 =
+/// >    task.async(fn() {
+/// >      use r <- puddle.apply(manager, fun, 32)
+/// >      r
+/// >   })
+///
+/// >  let t2 = 
+/// >    task.async(fn() {
+/// >      use r <- puddle.apply(manager, fun, 32)
+/// >      r
+/// >    })
+/// 
+/// >  task.await(t1, 32)
+/// >  task.await(t2, 32)
+/// ```
 pub fn apply(
   manager: process.Subject(BookkeepingMessage(resource_type, result_type)),
   fun: fn(resource_type) -> result_type,
@@ -53,7 +81,9 @@ pub fn apply(
   let selector =
     process.new_selector()
     |> process.selecting(mine, fn(r) { r })
-  let result = process.select(selector, timeout)
+  let result =
+    process.select(selector, timeout)
+    |> result.flatten
   check_in(manager, subject)
   rest(result)
 }

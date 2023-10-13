@@ -1,6 +1,6 @@
 description = "A resource pool manager for gleam"
 name = "puddle"
-version = "0.1.0"
+version = "0.2.0"
 
 licences = ["Apache-2.0"]
 links = [{title = "gleam", href = "https://gleam.run"}]

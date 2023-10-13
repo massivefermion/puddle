@@ -14,8 +14,8 @@ pub fn main() {
 pub const test_output = "test_output"
 
 pub fn parallel_test() {
-  let puddle =
-    puddle.new(
+  let manager =
+    puddle.start_manager(
       3,
       fn() {
         int.random(1024, 8192)
@@ -24,34 +24,36 @@ pub fn parallel_test() {
     )
     |> should.be_ok
 
-  let #(#(sub1_id, sub1), puddle) =
-    puddle.checkout(puddle)
-    |> should.be_ok
-
-  let #(#(_sub2_id, sub2), puddle) =
-    puddle.checkout(puddle)
-    |> should.be_ok
-
-  let #(#(_sub3_id, sub3), puddle) =
-    puddle.checkout(puddle)
-    |> should.be_ok
-
-  let mine = process.new_subject()
   let fun = fn(n) {
     let n_str = int.to_string(n)
     let _ = file.append(n_str <> " ", test_output)
     let _ = file.append(n_str <> " ", test_output)
     let _ = file.append(n_str <> " ", test_output)
+    n_str
   }
 
+  let sub1 =
+    process.call(manager, puddle.Checkout, 32)
+    |> should.be_ok
+
+  let sub2 =
+    process.call(manager, puddle.Checkout, 32)
+    |> should.be_ok
+
+  let sub3 =
+    process.call(manager, puddle.Checkout, 32)
+    |> should.be_ok
+
+  let mine = process.new_subject()
+
   sub1
-  |> process.send(puddle.Utilize(fun, mine))
+  |> process.send(puddle.UsageMessage(fun, mine))
 
   sub2
-  |> process.send(puddle.Utilize(fun, mine))
+  |> process.send(puddle.UsageMessage(fun, mine))
 
   sub3
-  |> process.send(puddle.Utilize(fun, mine))
+  |> process.send(puddle.UsageMessage(fun, mine))
 
   let selector =
     process.new_selector()
@@ -67,13 +69,13 @@ pub fn parallel_test() {
   |> should.be_ok
 
   let _ =
-    puddle.checkout(puddle)
+    process.call(manager, puddle.Checkout, 32)
     |> should.be_error
 
-  let puddle = puddle.put_back(puddle, sub1_id)
+  process.send(manager, puddle.PutBack(sub1))
 
   let _ =
-    puddle.checkout(puddle)
+    process.call(manager, puddle.Checkout, 32)
     |> should.be_ok
 
   let content =

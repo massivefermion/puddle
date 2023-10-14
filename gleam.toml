@@ -1,7 +1,8 @@
-description = "A resource pool manager for gleam"
 name = "puddle"
-version = "0.3.0"
+target = "erlang"
+version = "0.3.1"
 
+description = "A resource pool manager for gleam"
 licences = ["Apache-2.0"]
 links = [{title = "gleam", href = "https://gleam.run"}]
 repository = {type = "github", user = "massivefermion", repo = "puddle"}

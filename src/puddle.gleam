@@ -54,6 +54,10 @@ pub fn start(
 /// >      },
 /// >    )
 /// >
+/// >  fn fun(n) {
+/// >    n * 2
+/// >  }
+/// >
 /// >  let t1 =
 /// >    task.async(fn() {
 /// >      use r <- puddle.apply(manager, fun, 32)

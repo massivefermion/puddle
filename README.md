@@ -1,4 +1,4 @@
-![puddle](https://raw.githubusercontent.com/massivefermion/puddle/main/banner1.jpg)
+![puddle](https://raw.githubusercontent.com/massivefermion/puddle/main/banner.jpg)
 
 [![Package Version](https://img.shields.io/hexpm/v/puddle)](https://hex.pm/packages/puddle)
 [![Hex Docs](https://img.shields.io/badge/hex-docs-ffaff3)](https://hexdocs.pm/puddle/)

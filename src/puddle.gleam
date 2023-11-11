@@ -66,8 +66,8 @@ pub fn apply(
   rest(result)
 }
 
-pub fn shutdown(manager, shutdown_function) {
-  process.send(manager, ManagerShutdown(shutdown_function))
+pub fn shutdown(manager, resource_shutdown_function) {
+  process.send(manager, ManagerShutdown(resource_shutdown_function))
 }
 
 fn check_out(
@@ -117,10 +117,12 @@ fn handle_manager_message(
   puddle: Puddle(resource_type, result_type),
 ) {
   case msg {
-    ManagerShutdown(shutdown_function) -> {
+    ManagerShutdown(resource_shutdown_function) -> {
       list.each(
         puddle,
-        fn(item) { process.send(item.1, ResourceShutdown(shutdown_function)) },
+        fn(item) {
+          process.send(item.1, ResourceShutdown(resource_shutdown_function))
+        },
       )
       actor.Stop(process.Normal)
     }

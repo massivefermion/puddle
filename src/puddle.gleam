@@ -3,33 +3,34 @@ import gleam/result
 import gleam/otp/actor
 import gleam/erlang/process
 
-pub opaque type BookkeepingMessage(resource_type, result_type) {
-  Shutdown
-  CheckIn(process.Subject(UsageMessage(resource_type, result_type)))
+pub opaque type ManagerMessage(resource_type, result_type) {
+  ManagerShutdown(fn(resource_type) -> Nil)
+  CheckIn(process.Subject(ResourceMessage(resource_type, result_type)))
   CheckOut(
     process.Subject(
-      Result(process.Subject(UsageMessage(resource_type, result_type)), Nil),
+      Result(process.Subject(ResourceMessage(resource_type, result_type)), Nil),
     ),
   )
 }
 
-pub opaque type UsageMessage(resource_type, result_type) {
-  UsageMessage(
+pub opaque type ResourceMessage(resource_type, result_type) {
+  ResourceUsage(
     fn(resource_type) -> result_type,
     process.Subject(Result(result_type, Nil)),
   )
+  ResourceShutdown(fn(resource_type) -> Nil)
 }
 
 type Puddle(resource_type, result_type) =
   List(
-    #(process.Pid, process.Subject(UsageMessage(resource_type, result_type))),
+    #(process.Pid, process.Subject(ResourceMessage(resource_type, result_type))),
   )
 
 pub fn start(
   size: Int,
   new_resource: fn() -> Result(resource_type, Nil),
 ) -> Result(
-  process.Subject(BookkeepingMessage(resource_type, result_type)),
+  process.Subject(ManagerMessage(resource_type, result_type)),
   actor.StartError,
 ) {
   use puddle <- result.then(
@@ -38,17 +39,21 @@ pub fn start(
       actor.InitFailed(process.Abnormal("Failed to create new resource"))
     }),
   )
-  actor.start(puddle, handle_bookkeeping_message)
+  actor.start(puddle, handle_manager_message)
 }
 
 /// checks-out a resource, applies the function and then checks-in the resource
 pub fn apply(
-  manager: process.Subject(BookkeepingMessage(resource_type, result_type)),
+  manager: process.Subject(ManagerMessage(resource_type, result_type)),
   fun: fn(resource_type) -> result_type,
   timeout: Int,
   rest,
 ) {
-  use subject <- result.then(check_out(manager, timeout))
+  use subject <- result.then(
+    check_out(manager, timeout)
+    |> result.replace_error(Nil)
+    |> result.flatten,
+  )
   let mine = process.new_subject()
   utilize(subject, fun, mine)
   let selector =
@@ -61,24 +66,28 @@ pub fn apply(
   rest(result)
 }
 
+pub fn shutdown(manager, shutdown_function) {
+  process.send(manager, ManagerShutdown(shutdown_function))
+}
+
 fn check_out(
-  manager: process.Subject(BookkeepingMessage(resource_type, result_type)),
+  manager: process.Subject(ManagerMessage(resource_type, result_type)),
   timeout: Int,
 ) {
-  process.call(manager, CheckOut, timeout)
+  process.try_call(manager, CheckOut, timeout)
 }
 
 fn utilize(
-  subject: process.Subject(UsageMessage(resource_type, result_type)),
+  subject: process.Subject(ResourceMessage(resource_type, result_type)),
   fun: fn(resource_type) -> result_type,
   mine: process.Subject(Result(result_type, Nil)),
 ) {
-  process.send(subject, UsageMessage(fun, mine))
+  process.send(subject, ResourceUsage(fun, mine))
 }
 
 fn check_in(
-  manager: process.Subject(BookkeepingMessage(resource_type, result_type)),
-  subject: process.Subject(UsageMessage(resource_type, result_type)),
+  manager: process.Subject(ManagerMessage(resource_type, result_type)),
+  subject: process.Subject(ResourceMessage(resource_type, result_type)),
 ) {
   process.send(manager, CheckIn(subject))
 }
@@ -91,7 +100,7 @@ fn new(
   |> list.try_map(fn(_) {
     case new_resource() {
       Ok(initial_state) -> {
-        actor.start(initial_state, handle_usage_message)
+        actor.start(initial_state, handle_resource_message)
         |> result.map(fn(subject) {
           let pid = process.subject_owner(subject)
           #(pid, subject)
@@ -103,13 +112,16 @@ fn new(
   })
 }
 
-fn handle_bookkeeping_message(
-  msg: BookkeepingMessage(resource_type, result_type),
+fn handle_manager_message(
+  msg: ManagerMessage(resource_type, result_type),
   puddle: Puddle(resource_type, result_type),
 ) {
   case msg {
-    Shutdown -> {
-      list.each(puddle, fn(item) { process.kill(item.0) })
+    ManagerShutdown(shutdown_function) -> {
+      list.each(
+        puddle,
+        fn(item) { process.send(item.1, ResourceShutdown(shutdown_function)) },
+      )
       actor.Stop(process.Normal)
     }
     CheckIn(subject) -> {
@@ -131,15 +143,20 @@ fn handle_bookkeeping_message(
   }
 }
 
-fn handle_usage_message(
-  msg: UsageMessage(resource_type, result_type),
+fn handle_resource_message(
+  msg: ResourceMessage(resource_type, result_type),
   resource: resource_type,
 ) {
   case msg {
-    UsageMessage(fun, client) -> {
+    ResourceUsage(fun, client) -> {
       let result = fun(resource)
       actor.send(client, Ok(result))
       actor.continue(resource)
+    }
+
+    ResourceShutdown(shutdown) -> {
+      shutdown(resource)
+      actor.Stop(process.Normal)
     }
   }
 }

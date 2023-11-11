@@ -42,37 +42,6 @@ pub fn start(
 }
 
 /// checks-out a resource, applies the function and then checks-in the resource
-///
-/// ## Example
-///
-/// ```gleam
-/// >  let assert Ok(manager) =
-/// >    puddle.start(
-/// >      4,
-/// >      fn() {
-/// >        Ok(int.random(1024, 8192))
-/// >      },
-/// >    )
-/// >
-/// >  fn fun(n) {
-/// >    n * 2
-/// >  }
-/// >
-/// >  let t1 =
-/// >    task.async(fn() {
-/// >      use r <- puddle.apply(manager, fun, 32)
-/// >      r
-/// >   })
-///
-/// >  let t2 = 
-/// >    task.async(fn() {
-/// >      use r <- puddle.apply(manager, fun, 32)
-/// >      r
-/// >    })
-/// 
-/// >  task.await(t1, 32)
-/// >  task.await(t2, 32)
-/// ```
 pub fn apply(
   manager: process.Subject(BookkeepingMessage(resource_type, result_type)),
   fun: fn(resource_type) -> result_type,

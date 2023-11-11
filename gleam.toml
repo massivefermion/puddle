@@ -1,16 +1,18 @@
 name = "puddle"
 target = "erlang"
-version = "0.3.1"
+version = "0.4.0"
 
 description = "A resource pool manager for gleam"
+gleam = ">= 0.32.0"
 licences = ["Apache-2.0"]
-links = [{title = "gleam", href = "https://gleam.run"}]
+links = [{title = "Gleam", href = "https://gleam.run"}]
 repository = {type = "github", user = "massivefermion", repo = "puddle"}
 
 [dependencies]
-gleam_erlang = "~> 0.22"
-gleam_otp = "~> 0.7"
-gleam_stdlib = "~> 0.31"
+gleam_erlang = "~> 0.23"
+gleam_otp = "~> 0.8"
+gleam_stdlib = "~> 0.32"
 
 [dev-dependencies]
-gleeunit = "~> 0.11"
+gleeunit = "~> 1.0"
+simplifile = "~> 0.2"

@@ -5,7 +5,7 @@ import puddle
 import gleeunit
 import gleeunit/should
 import gleam/otp/task
-import gleam/erlang/file
+import simplifile.{append, delete, read}
 
 pub fn main() {
   gleeunit.main()
@@ -26,9 +26,9 @@ pub fn parallel_test() {
 
   let fun = fn(n) {
     let n_str = int.to_string(n)
-    let _ = file.append(n_str <> " ", test_output)
-    let _ = file.append(n_str <> " ", test_output)
-    let _ = file.append(n_str <> " ", test_output)
+    let _ = append(n_str <> " ", test_output)
+    let _ = append(n_str <> " ", test_output)
+    let _ = append(n_str <> " ", test_output)
     n_str
   }
 
@@ -78,10 +78,10 @@ pub fn parallel_test() {
   |> should.be_ok
 
   let content =
-    file.read(test_output)
+    read(test_output)
     |> should.be_ok
 
-  file.delete(test_output)
+  delete(test_output)
   |> should.be_ok
 
   let split_string = string.split(content, " ")

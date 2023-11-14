@@ -26,9 +26,9 @@ pub fn parallel_test() {
 
   let fun = fn(n) {
     let n_str = int.to_string(n)
-    let _ = append(n_str <> " ", test_output)
-    let _ = append(n_str <> " ", test_output)
-    let _ = append(n_str <> " ", test_output)
+    let _ = append(test_output, n_str <> " ")
+    let _ = append(test_output, n_str <> " ")
+    let _ = append(test_output, n_str <> " ")
     n_str
   }
 

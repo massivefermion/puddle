@@ -22,19 +22,17 @@ pub opaque type ResourceMessage(resource_type, result_type) {
 }
 
 type Puddle(resource_type, result_type) =
-  List(
-    #(process.Pid, process.Subject(ResourceMessage(resource_type, result_type))),
-  )
+  List(process.Subject(ResourceMessage(resource_type, result_type)))
 
 pub fn start(
   size: Int,
-  new_resource: fn() -> Result(resource_type, Nil),
+  resource_creation_function: fn() -> Result(resource_type, Nil),
 ) -> Result(
   process.Subject(ManagerMessage(resource_type, result_type)),
   actor.StartError,
 ) {
   use puddle <- result.then(
-    new(size, new_resource)
+    new(size, resource_creation_function)
     |> result.map_error(fn(_) {
       actor.InitFailed(process.Abnormal("Failed to create new resource"))
     }),
@@ -94,17 +92,13 @@ fn check_in(
 
 fn new(
   size: Int,
-  new_resource: fn() -> Result(resource_type, Nil),
+  resource_creation_function: fn() -> Result(resource_type, Nil),
 ) -> Result(Puddle(resource_type, result_type), Nil) {
   list.repeat("", size)
   |> list.try_map(fn(_) {
-    case new_resource() {
+    case resource_creation_function() {
       Ok(initial_state) -> {
         actor.start(initial_state, handle_resource_message)
-        |> result.map(fn(subject) {
-          let pid = process.subject_owner(subject)
-          #(pid, subject)
-        })
         |> result.nil_error()
       }
       Error(Nil) -> Error(Nil)
@@ -121,14 +115,13 @@ fn handle_manager_message(
       list.each(
         puddle,
         fn(item) {
-          process.send(item.1, ResourceShutdown(resource_shutdown_function))
+          process.send(item, ResourceShutdown(resource_shutdown_function))
         },
       )
       actor.Stop(process.Normal)
     }
     CheckIn(subject) -> {
-      let pid = process.subject_owner(subject)
-      actor.continue(list.prepend(puddle, #(pid, subject)))
+      actor.continue(list.prepend(puddle, subject))
     }
     CheckOut(client) -> {
       case puddle {
@@ -136,7 +129,7 @@ fn handle_manager_message(
           actor.send(client, Error(Nil))
           actor.continue(puddle)
         }
-        [#(_, chosen), ..new_puddle] -> {
+        [chosen, ..new_puddle] -> {
           actor.send(client, Ok(chosen))
           actor.continue(new_puddle)
         }

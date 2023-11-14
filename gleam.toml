@@ -1,6 +1,6 @@
 name = "puddle"
 target = "erlang"
-version = "0.4.0"
+version = "0.5.0"
 
 description = "A resource pool manager for gleam"
 gleam = ">= 0.32.0"
@@ -15,4 +15,4 @@ gleam_stdlib = "~> 0.32"
 
 [dev-dependencies]
 gleeunit = "~> 1.0"
-simplifile = "~> 0.2"
+simplifile = "~> 0.3"

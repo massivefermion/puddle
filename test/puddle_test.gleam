@@ -21,6 +21,7 @@ pub fn parallel_test() {
         int.random(1024, 8192)
         |> Ok
       },
+      32,
     )
     |> should.be_ok
 
@@ -112,4 +113,55 @@ pub fn parallel_test() {
   |> should.be_true
 
   Ok(Nil)
+}
+
+pub fn worker_crash_test() {
+  let manager =
+    puddle.start(1, fn() { Ok(8) }, 32)
+    |> should.be_ok
+
+  let _ =
+    task.async(fn() {
+      use r <- puddle.apply(
+        manager,
+        fn(_) {
+          let assert 2 = 4
+        },
+        32,
+      )
+      r
+    })
+
+  let t =
+    task.async(fn() {
+      use r <- puddle.apply(manager, fn(n) { n }, 32)
+      r
+    })
+
+  task.await(t, 32)
+  |> should.be_ok
+  |> should.equal(8)
+}
+
+pub fn user_crash_test() {
+  let manager =
+    puddle.start(1, fn() { Ok(8) }, 32)
+    |> should.be_ok
+
+  let _ =
+    task.async(fn() {
+      use r <- puddle.apply(manager, fn(n) { n }, 32)
+      let assert True = False
+      r
+    })
+
+  let t =
+    task.async(fn() {
+      use r <- puddle.apply(manager, fn(n) { n }, 32)
+      r
+    })
+
+  task.await(t, 32)
+  |> should.be_ok
+  |> should.equal(8)
 }

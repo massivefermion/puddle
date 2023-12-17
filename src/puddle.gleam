@@ -6,8 +6,9 @@ import gleam/otp/actor
 import gleam/erlang/process
 
 pub opaque type ManagerMessage(resource_type, result_type) {
-  ManagerShutdown(fn(resource_type) -> Nil)
   CheckIn(process.Pid)
+  ProcessDown(process.ProcessDown)
+  ManagerShutdown(fn(resource_type) -> Nil)
   CheckOut(
     process.Pid,
     process.Subject(
@@ -20,16 +21,14 @@ pub opaque type ManagerMessage(resource_type, result_type) {
       ),
     ),
   )
-
-  ProcessDown(process.ProcessDown)
 }
 
 pub opaque type ResourceMessage(resource_type, result_type) {
+  ResourceShutdown(fn(resource_type) -> Nil)
   ResourceUsage(
     fn(resource_type) -> result_type,
     process.Subject(Result(result_type, Nil)),
   )
-  ResourceShutdown(fn(resource_type) -> Nil)
 }
 
 type IdleWorker(resource_type, result_type) {
@@ -55,12 +54,6 @@ type Puddle(resource_type, result_type) {
     idle: dict.Dict(process.Pid, IdleWorker(resource_type, result_type)),
     busy: dict.Dict(process.Pid, BusyWorker(resource_type, result_type)),
   )
-  // #(
-  //   process.Pid,
-  //   process.ProcessMonitor,
-  //   process.ProcessMonitor,
-  //   process.Subject(ResourceMessage(resource_type, result_type)),
-  // ),
 }
 
 pub fn start(
@@ -254,26 +247,32 @@ fn handle_manager_message(
           actor.send(client, Error(Nil))
           actor.continue(puddle)
         }
+
         [#(worker_pid, IdleWorker(worker_monitor, chosen)), ..new_idle] -> {
           actor.send(client, Ok(#(worker_pid, chosen)))
           let user_monitor = process.monitor_process(pid)
+
           let new_busy =
             dict.insert(
               puddle.busy,
               pid,
               BusyWorker(worker_pid, user_monitor, worker_monitor, chosen),
             )
+
+          let selector =
+            process.selecting_process_down(
+              puddle.selector,
+              user_monitor,
+              ProcessDown(_),
+            )
+
           actor.continue(Puddle(
-            puddle.selector,
+            selector,
             puddle.create_resource,
             idle: dict.from_list(new_idle),
             busy: new_busy,
           ))
-          |> actor.with_selector(process.selecting_process_down(
-            puddle.selector,
-            user_monitor,
-            ProcessDown(_),
-          ))
+          |> actor.with_selector(selector)
         }
       }
     }

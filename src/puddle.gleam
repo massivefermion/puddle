@@ -5,6 +5,51 @@ import gleam/list
 import gleam/otp/actor
 import gleam/result
 
+/// A resource pool manager for Gleam.
+///
+/// `puddle` manages a fixed-size pool of reusable resources (workers), each holding
+/// a single resource instance. It handles check-out/check-in, automatic crash recovery,
+/// and backpressure when the pool is exhausted.
+///
+/// ## Quick Start
+///
+/// ```gleam
+/// import gleam/int
+/// import gleam/io
+/// import puddle
+///
+/// pub fn main() {
+///   let assert Ok(manager) = puddle.start(4, fn() { Ok(int.random(8192)) }, 1000)
+///
+///   let result = {
+///     use r <- puddle.apply(manager, fn(n) { n * 2 }, 1000)
+///     r
+///   }
+///   io.debug(result) // Ok(16384)
+/// }
+/// ```
+///
+/// ## Resource Lifecycle
+///
+/// 1. **Creation**: `start` spawns `size` workers, each calling `create_resource`
+/// 2. **Check-out**: `apply` acquires an idle worker exclusively
+/// 3. **Execution**: User function runs with the resource
+/// 4. **Check-in**: Resource returned to idle pool automatically (via `use` syntax)
+/// 5. **Shutdown**: `shutdown` gracefully stops all workers
+///
+/// ## Crash Recovery
+///
+/// - **Idle worker crash**: Replaced automatically, pool size maintained
+/// - **Busy worker crash**: Replaced automatically; caller receives `Error(Nil)`
+/// - **User process crash**: Resource returned to pool automatically
+///
+/// ## Concurrency
+///
+/// - Multiple processes can call `apply` concurrently
+/// - Same process can reuse the pool sequentially
+/// - Pool exhaustion returns `Error(Nil)` immediately (no queueing)
+///
+/// See `puddle_test.gleam` for usage patterns and edge cases.
 pub opaque type ManagerMessage(resource_type, result_type) {
   CheckIn(process.Pid)
   ProcessDown(process.Down)
@@ -60,6 +105,24 @@ type Puddle(resource_type, result_type) {
   )
 }
 
+/// Starts a new resource pool with the given size.
+///
+/// Each worker is initialized by calling `create_resource`. If any worker fails to
+/// initialize, the entire pool startup fails and returns `Error(actor.StartError)`.
+///
+/// ### Parameters
+/// - `size`: Number of workers in the pool (fixed for the pool's lifetime)
+/// - `create_resource`: Function that creates a resource instance.
+///   Return `Ok(resource)` on success, `Error(Nil)` on failure.
+/// - `timeout`: Milliseconds to wait for pool initialization.
+///
+/// ### Returns
+/// `Ok(manager_subject)` on success, `Error(actor.StartError)` on failure.
+///
+/// ### Example
+/// ```gleam
+/// let assert Ok(pool) = puddle.start(10, fn() { connect_to_db() }, 5000)
+/// ```
 pub fn start(
   size: Int,
   create_resource: fn() -> Result(resource_type, Nil),
@@ -103,7 +166,31 @@ pub fn start(
   |> result.map(fn(started) { started.data })
 }
 
-/// checks-out a resource, applies the function and then checks-in the resource
+/// Checks out a resource, applies `fun`, and checks the resource back in.
+///
+/// Uses Gleam's `use` syntax for automatic check-in. The resource is returned to
+/// the idle pool when the `use` block exits (normally or via error).
+///
+/// ### Parameters
+/// - `manager`: Pool manager returned by `start`
+/// - `fun`: Function receiving the resource, returning a result
+/// - `timeout`: Milliseconds to wait for check-out AND function execution
+///
+/// ### Returns
+/// `Result(result_type, Nil)` via continuation. Returns `Error(Nil)` if:
+/// - No idle workers available (pool exhausted)
+/// - Check-out times out
+/// - Function execution times out
+/// - Worker crashes during execution
+///
+/// ### Example
+/// ```gleam
+/// let result = {
+///   use conn <- puddle.apply(pool, fn(c) { query(c, "SELECT * FROM users") }, 2000)
+///   conn
+/// }
+/// // result = Ok("...") or Error(Nil)
+/// ```
 pub fn apply(
   manager: process.Subject(ManagerMessage(resource_type, result_type)),
   fun: fn(resource_type) -> result_type,
@@ -127,6 +214,23 @@ pub fn apply(
   rest(result)
 }
 
+/// Gracefully shuts down the pool.
+///
+/// Sends a shutdown signal to the manager. The manager will:
+/// 1. Immediately shut down all idle workers (calling `shutdown_resource`)
+/// 2. Wait for busy workers to complete their current `apply`, then shut them down
+/// 3. Stop the manager actor
+///
+/// ### Parameters
+/// - `manager`: Pool manager from `start`
+/// - `shutdown_resource`: Function to clean up a resource (e.g., close connection)
+///
+/// ### Example
+/// ```gleam
+/// puddle.shutdown(pool, fn(DbConnection(host, port)) {
+///   close_connection(host, port)
+/// })
+/// ```
 pub fn shutdown(manager, shutdown_resource) {
   process.send(manager, ManagerShutdown(shutdown_resource))
 }

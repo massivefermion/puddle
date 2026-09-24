@@ -1,30 +1,17 @@
-![puddle](https://raw.githubusercontent.com/massivefermion/puddle/main/banner.jpg)
+# puddle
+
+A resource pool manager for Gleam. Manages a fixed pool of reusable resources with automatic crash recovery and backpressure.
 
 [![Package Version](https://img.shields.io/hexpm/v/puddle)](https://hex.pm/packages/puddle)
 [![Hex Docs](https://img.shields.io/badge/hex-docs-ffaff3)](https://hexdocs.pm/puddle/)
 
-# puddle
-
-A resource pool manager for gleam
-
-## <img width=32 src="https://raw.githubusercontent.com/massivefermion/puddle/main/icon.png"> Quick start
-
-```sh
-gleam test  # Run the tests
-gleam shell # Run an Erlang shell
-```
-
-## <img width=32 src="https://raw.githubusercontent.com/massivefermion/puddle/main/icon.png"> Installation
-
-This package can be added to your Gleam project:
+## Installation
 
 ```sh
 gleam add puddle
 ```
 
-and its documentation can be found at <https://hexdocs.pm/puddle>.
-
-## <img width=32 src="https://raw.githubusercontent.com/massivefermion/puddle/main/icon.png"> Usage
+## Quick Start
 
 ```gleam
 import gleam/int
@@ -34,19 +21,40 @@ import puddle
 pub fn main() {
   let assert Ok(manager) = puddle.start(4, fn() { Ok(int.random(8192)) }, 1000)
 
-  let fun = fn(n) { n * 2 }
-
-  // Use apply directly from the current process
-  let result1 = {
-    use r <- puddle.apply(manager, fun, 1000)
+  let result = {
+    use r <- puddle.apply(manager, fn(n) { n * 2 }, 1000)
     r
   }
-  io.debug(result1)
-
-  let result2 = {
-    use r <- puddle.apply(manager, fun, 1000)
-    r
-  }
-  io.debug(result2)
+  io.debug(result) // Ok(16384)
 }
 ```
+
+## API
+
+| Function | Description |
+|----------|-------------|
+| `start(size, create_resource, timeout)` | Creates and starts the pool |
+| `apply(manager, fun, timeout)` | Checks out resource, runs `fun`, checks in |
+| `shutdown(manager, shutdown_resource)` | Gracefully stops the pool |
+
+## Features
+
+- **Fixed-size pool** — predictable resource usage
+- **Automatic crash recovery** — workers replaced on failure
+- **Backpressure** — `apply` returns `Error(Nil)` immediately when exhausted
+- **Graceful shutdown** — drains busy workers before stopping
+- **Gleam `use` syntax** — automatic check-in via `use r <- puddle.apply(...)`
+
+## Documentation
+
+Full API documentation: <https://hexdocs.pm/puddle/>
+
+## Testing
+
+```sh
+gleam test
+```
+
+## License
+
+Apache-2.0

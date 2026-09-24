@@ -69,7 +69,9 @@ pub fn start(
   actor.StartError,
 ) {
   actor.new_with_initialiser(timeout, fn(default_subject) {
-    let selector = process.new_selector()
+    let selector =
+      process.new_selector()
+      |> process.select(default_subject)
 
     case new(size, create_resource) {
       Ok(subjects) -> {
@@ -77,6 +79,9 @@ pub fn start(
           subjects
           |> list.map(fn(subject) {
             let assert Ok(pid) = process.subject_owner(subject)
+            // Remove the link created by actor.start so worker crashes
+            // don't kill the pool manager. We use monitors instead.
+            process.unlink(pid)
             #(pid, process.monitor(pid), subject)
           })
 
@@ -227,6 +232,9 @@ fn replace_crashed_worker(
         Ok(started) -> {
           let subject = started.data
           let assert Ok(worker_pid) = process.subject_owner(subject)
+          // Remove the link created by actor.start so worker crashes
+          // don't kill the pool manager. We use monitors instead.
+          process.unlink(worker_pid)
           let worker_monitor = process.monitor(worker_pid)
 
           let selector =

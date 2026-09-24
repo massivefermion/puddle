@@ -7,29 +7,59 @@ import gleam/otp/actor
 import gleam/otp/supervision
 import gleam/result
 
-// --- Public types ---
-
+///
+/// Strategy for selecting which idle resource to check out.
+///
+/// - `FIFO` (default): Oldest idle resource first. Provides fair ordering.
+/// - `LIFO`: Most recently returned resource first. Better cache locality.
+///
 pub type CheckoutStrategy {
   FIFO
   LIFO
 }
 
+///
+/// Strategy for when resources are created in the pool.
+///
+/// - `Eager` (default): Create all resources at pool startup.
+/// - `Lazy`: Create resources on first demand, up to the pool `size`.
+///
 pub type CreationStrategy {
   Lazy
   Eager
 }
 
+///
+/// The result of a resource usage function, indicating whether to keep
+/// or discard the resource after use.
+///
+/// - `Keep(value)`: Return the resource to the pool with the result value.
+/// - `Discard(value)`: Destroy the resource and create a replacement, returning the value.
+///
 pub type Next(result_type) {
   Keep(result_type)
   Discard(result_type)
 }
 
+///
+/// Current state of the resource pool.
+///
+/// - `Ready`: Idle resources are available for immediate checkout.
+/// - `Full`: All resources are busy, no waiters queued.
+/// - `Overloaded`: All resources are busy, requests are queued.
+///
 pub type PoolState {
   Ready
   Full
   Overloaded
 }
 
+///
+/// Status snapshot of the resource pool.
+///
+/// Contains the current state, configured size, and counts of available,
+/// busy, and waiting resources/requests.
+///
 pub type PoolStatus {
   PoolStatus(
     state: PoolState,
@@ -40,6 +70,13 @@ pub type PoolStatus {
   )
 }
 
+///
+/// Errors that can occur when applying a function to a pooled resource.
+///
+/// - `NoResourcesAvailable`: Pool exhausted and no lazy capacity (non-blocking checkout).
+/// - `CheckoutTimeout`: Timeout while waiting for a resource (blocking checkout).
+/// - `PoolShuttingDown`: Pool is shutting down, no new checkouts allowed.
+///
 pub type ApplyError {
   NoResourcesAvailable
   CheckoutTimeout
@@ -48,6 +85,12 @@ pub type ApplyError {
 
 // --- Builder ---
 
+///
+/// Opaque builder type for configuring and creating a resource pool.
+///
+/// Use `puddle.new/1` to create a builder, then chain configuration functions
+/// before calling `puddle.start/2` or `puddle.supervised/2`.
+///
 pub opaque type Builder(resource_type, result_type) {
   Builder(
     create_resource: fn() -> Result(resource_type, Nil),
@@ -59,6 +102,19 @@ pub opaque type Builder(resource_type, result_type) {
   )
 }
 
+///
+/// Create a new pool builder with a resource creation function.
+///
+/// The `create_resource` function is called to create new resources.
+/// It should return `Ok(resource)` on success or `Error(Nil)` on failure.
+///
+/// Default configuration:
+/// - Size: 10
+/// - Checkout strategy: FIFO
+/// - Creation strategy: Eager
+/// - Shutdown callback: no-op
+/// - Name: None
+///
 pub fn new(
   create_resource: fn() -> Result(resource_type, Nil),
 ) -> Builder(resource_type, result_type) {
@@ -72,6 +128,14 @@ pub fn new(
   )
 }
 
+///
+/// Set the maximum number of resources in the pool.
+///
+/// Default: 10
+///
+/// When using `Lazy` creation strategy, resources are created up to this limit
+/// on demand. When using `Eager` strategy, this many resources are created at startup.
+///
 pub fn size(
   builder: Builder(resource_type, result_type),
   size: Int,
@@ -79,6 +143,14 @@ pub fn size(
   Builder(..builder, size: size)
 }
 
+///
+/// Set the checkout strategy for selecting idle resources.
+///
+/// Default: `FIFO`
+///
+/// - `FIFO`: Oldest idle resource first (fair ordering)
+/// - `LIFO`: Most recently returned resource first (better cache locality)
+///
 pub fn checkout_strategy(
   builder: Builder(resource_type, result_type),
   strategy: CheckoutStrategy,
@@ -86,6 +158,14 @@ pub fn checkout_strategy(
   Builder(..builder, checkout_strategy: strategy)
 }
 
+///
+/// Set the resource creation strategy.
+///
+/// Default: `Eager`
+///
+/// - `Eager`: Create all resources at pool startup
+/// - `Lazy`: Create resources on first demand, up to `size`
+///
 pub fn creation_strategy(
   builder: Builder(resource_type, result_type),
   strategy: CreationStrategy,
@@ -93,6 +173,18 @@ pub fn creation_strategy(
   Builder(..builder, creation_strategy: strategy)
 }
 
+///
+/// Set a callback to run when each resource is shut down.
+///
+/// The callback is called for every resource in the pool when:
+/// - The pool is shut down via `puddle.shutdown/1`
+/// - A resource is discarded via `puddle.discard/1`
+/// - A worker process crashes and is replaced
+///
+/// Use this to clean up resources (e.g., close database connections).
+///
+/// Default: no-op
+///
 pub fn on_shutdown(
   builder: Builder(resource_type, result_type),
   callback: fn(resource_type) -> Nil,
@@ -100,6 +192,26 @@ pub fn on_shutdown(
   Builder(..builder, on_shutdown: callback)
 }
 
+///
+/// Register the pool under a globally accessible name.
+///
+/// The pool can then be accessed from anywhere using
+/// `process.named_subject(name)` without passing the manager reference.
+///
+/// ```gleam
+/// import gleam/erlang/process
+///
+/// let pool_name = process.new_name("my_db_pool")
+/// let assert Ok(manager) =
+///   puddle.new(create_connection)
+///   |> puddle.size(10)
+///   |> puddle.name(pool_name)
+///   |> puddle.start(5000)
+///
+/// // Later, from anywhere:
+/// let manager = process.named_subject(pool_name)
+/// ```
+///
 pub fn name(
   builder: Builder(resource_type, result_type),
   pool_name: process.Name(ManagerMessage(resource_type, result_type)),
@@ -109,16 +221,35 @@ pub fn name(
 
 // --- Convenience constructors for Next ---
 
+///
+/// Signal to keep the resource in the pool after use.
+///
+/// Returns `Next(result_type)` wrapping the value to pass to the continuation.
+///
 pub fn keep(value: result_type) -> Next(result_type) {
   Keep(value)
 }
 
+///
+/// Signal to discard the resource and create a replacement.
+///
+/// The resource will be shut down via the `on_shutdown` callback and a new
+/// resource will be created (up to the pool size limit).
+///
+/// Returns `Next(result_type)` wrapping the value to pass to the continuation.
+///
 pub fn discard(value: result_type) -> Next(result_type) {
   Discard(value)
 }
 
 // --- Messages ---
 
+///
+/// Internal message type for the pool manager actor.
+///
+/// This type is opaque - use the public API functions instead of sending
+/// these messages directly.
+///
 pub opaque type ManagerMessage(resource_type, result_type) {
   CheckIn(process.Pid)
   DiscardWorker(process.Pid)
@@ -151,6 +282,11 @@ pub opaque type ManagerMessage(resource_type, result_type) {
   )
 }
 
+///
+/// Internal message type for resource worker actors.
+///
+/// This type is opaque - use the public API functions instead.
+///
 pub opaque type ResourceMessage(resource_type, result_type) {
   ResourceShutdown(fn(resource_type) -> Nil)
   ResourceUsage(
@@ -215,6 +351,23 @@ type Puddle(resource_type, result_type) {
 
 // --- Public API ---
 
+///
+/// Start the resource pool and return a manager subject.
+///
+/// The pool is started as a supervised actor. The `timeout` parameter
+/// is the maximum time (in milliseconds) to wait for the pool to start
+/// and for initial resource creation (if using `Eager` strategy).
+///
+/// Returns `Ok(manager_subject)` on success, or `Error(StartError)` if
+/// the actor fails to start or resource creation fails.
+///
+/// ```gleam
+/// let assert Ok(manager) =
+///   puddle.new(create_connection)
+///   |> puddle.size(10)
+///   |> puddle.start(5000)
+/// ```
+///
 pub fn start(
   builder: Builder(resource_type, result_type),
   timeout: Int,
@@ -227,6 +380,29 @@ pub fn start(
   |> result.map(fn(started) { started.data })
 }
 
+///
+/// Create a child specification for running the pool under an OTP supervisor.
+///
+/// The pool will be started as a worker under the supervisor. The `timeout`
+/// parameter is the maximum time (in milliseconds) to wait for the pool
+/// to start and for initial resource creation (if using `Eager` strategy).
+///
+/// Use with `gleam/otp/static_supervisor` or `gleam/otp/dynamic_supervisor`.
+///
+/// ```gleam
+/// import gleam/otp/static_supervisor
+///
+/// let child_spec =
+///   puddle.new(create_resource)
+///   |> puddle.size(5)
+///   |> puddle.supervised(5000)
+///
+/// let assert Ok(_supervisor) =
+///   static_supervisor.new(static_supervisor.OneForOne)
+///   |> static_supervisor.add(child_spec)
+///   |> static_supervisor.start
+/// ```
+///
 pub fn supervised(
   builder: Builder(resource_type, result_type),
   timeout: Int,
@@ -239,6 +415,35 @@ pub fn supervised(
   })
 }
 
+///
+/// Apply a function to a pooled resource (non-blocking checkout).
+///
+/// Checks out a resource, applies `fun` to it, and returns the result.
+/// If no resource is available and the pool has no lazy capacity,
+/// returns `Error(NoResourcesAvailable)` immediately.
+///
+/// The `fun` function receives the resource and must return a `Next(result_type)`:
+/// - `puddle.keep(value)` - return resource to pool, continue with `value`
+/// - `puddle.discard(value)` - destroy resource, create replacement, continue with `value`
+///
+/// The `timeout` is the maximum time (in milliseconds) to wait for:
+/// - Resource checkout (if pool not exhausted)
+/// - Function execution and result
+///
+/// Uses the `rest` callback to handle the final result or error.
+///
+/// ```gleam
+/// let result = {
+///   use r <- puddle.apply(manager, fn(conn) {
+///     case db.query(conn, "SELECT 1") {
+///       Ok(rows) -> puddle.keep(rows)
+///       Error(_) -> puddle.discard([])
+///     }
+///   }, 1000)
+///   r
+/// }
+/// ```
+///
 pub fn apply(
   manager: process.Subject(ManagerMessage(resource_type, result_type)),
   fun: fn(resource_type) -> Next(result_type),
@@ -249,6 +454,26 @@ pub fn apply(
   use_and_return(manager, subject, fun, timeout, rest)
 }
 
+///
+/// Apply a function to a pooled resource (blocking checkout).
+///
+/// Similar to `apply/4`, but if all resources are busy, the request
+/// is queued until a resource becomes available or the timeout expires.
+///
+/// If a resource becomes available within `timeout` milliseconds, the
+/// function is applied and the result returned. Otherwise, returns
+/// `Error(CheckoutTimeout)`.
+///
+/// The `timeout` applies to the total time waiting for a resource
+/// plus function execution.
+///
+/// ```gleam
+/// let result = {
+///   use r <- puddle.apply_blocking(manager, fn(n) { puddle.keep(n) }, 5000)
+///   r
+/// }
+/// ```
+///
 pub fn apply_blocking(
   manager: process.Subject(ManagerMessage(resource_type, result_type)),
   fun: fn(resource_type) -> Next(result_type),
@@ -259,12 +484,50 @@ pub fn apply_blocking(
   use_and_return(manager, subject, fun, timeout, rest)
 }
 
+///
+/// Gracefully shut down the resource pool.
+///
+/// Sends a shutdown signal to the pool manager. The manager will:
+/// 1. Stop accepting new checkouts
+/// 2. Wait for currently checked-out resources to be returned
+/// 3. Call the `on_shutdown` callback for each resource
+/// 4. Stop the manager actor
+///
+/// This function returns immediately; shutdown happens asynchronously.
+/// Use `puddle.status/2` to monitor shutdown progress if needed.
+///
+/// ```gleam
+/// puddle.shutdown(manager)
+/// ```
+///
 pub fn shutdown(
   manager: process.Subject(ManagerMessage(resource_type, result_type)),
 ) {
   process.send(manager, ManagerShutdown)
 }
 
+///
+/// Get the current status of the resource pool.
+///
+/// Returns a `PoolStatus` record containing:
+/// - `state`: `Ready`, `Full`, or `Overloaded`
+/// - `size`: configured pool size
+/// - `available`: number of idle resources
+/// - `busy`: number of checked-out resources
+/// - `waiting`: number of queued blocking requests
+///
+/// The `timeout` is the maximum time (in milliseconds) to wait for
+/// the status response from the manager.
+///
+/// ```gleam
+/// let status = puddle.status(manager, 1000)
+/// case status.state {
+///   puddle.Ready -> io.debug("Pool ready")
+///   puddle.Full -> io.debug("Pool full")
+///   puddle.Overloaded -> io.debug("Pool overloaded")
+/// }
+/// ```
+///
 pub fn status(
   manager: process.Subject(ManagerMessage(resource_type, result_type)),
   timeout: Int,

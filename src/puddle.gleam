@@ -214,6 +214,18 @@ fn move_to_busy(
   )
 }
 
+fn remove_busy_entry(
+  puddle: Puddle(resource_type, result_type),
+  worker_pid: process.Pid,
+  user_pid: process.Pid,
+) -> Puddle(resource_type, result_type) {
+  Puddle(
+    ..puddle,
+    busy_by_worker: dict.drop(puddle.busy_by_worker, [worker_pid]),
+    busy_by_user: dict.drop(puddle.busy_by_user, [user_pid]),
+  )
+}
+
 fn replace_crashed_worker(
   puddle: Puddle(resource_type, result_type),
   idle: dict.Dict(process.Pid, IdleWorker(resource_type, result_type)),
@@ -303,12 +315,7 @@ fn handle_manager_message(
       case dict.get(puddle.busy_by_worker, worker_pid) {
         Ok(BusyEntry(user_pid, user_monitor, worker_monitor, subject)) -> {
           process.demonitor_process(user_monitor)
-          let puddle =
-            Puddle(
-              ..puddle,
-              busy_by_worker: dict.drop(puddle.busy_by_worker, [worker_pid]),
-              busy_by_user: dict.drop(puddle.busy_by_user, [user_pid]),
-            )
+          let puddle = remove_busy_entry(puddle, worker_pid, user_pid)
           actor.continue(move_to_idle(
             puddle,
             worker_pid,
@@ -372,12 +379,7 @@ fn handle_manager_message(
           case dict.get(puddle.busy_by_worker, down_pid) {
             Ok(BusyEntry(user_pid, user_monitor, _worker_monitor, _subject)) -> {
               process.demonitor_process(user_monitor)
-              let puddle =
-                Puddle(
-                  ..puddle,
-                  busy_by_worker: dict.drop(puddle.busy_by_worker, [down_pid]),
-                  busy_by_user: dict.drop(puddle.busy_by_user, [user_pid]),
-                )
+              let puddle = remove_busy_entry(puddle, down_pid, user_pid)
               replace_crashed_worker(puddle, puddle.idle)
             }
 
@@ -392,14 +394,7 @@ fn handle_manager_message(
                     subject,
                   )) = dict.get(puddle.busy_by_worker, worker_pid)
                   process.demonitor_process(user_monitor)
-                  let puddle =
-                    Puddle(
-                      ..puddle,
-                      busy_by_worker: dict.drop(puddle.busy_by_worker, [
-                        worker_pid,
-                      ]),
-                      busy_by_user: dict.drop(puddle.busy_by_user, [down_pid]),
-                    )
+                  let puddle = remove_busy_entry(puddle, worker_pid, down_pid)
                   actor.continue(move_to_idle(
                     puddle,
                     worker_pid,

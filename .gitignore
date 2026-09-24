@@ -2,3 +2,12 @@
 *.ez
 build
 erl_crash.dump
+test_output
+
+# Python testing artifacts
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.pyo

@@ -80,6 +80,20 @@ fn crash_worker_and_wait(manager, sleep_ms) {
   process.sleep(sleep_ms)
 }
 
+fn hold_resource(manager, sleep_ms, timeout) {
+  task_async(fn() {
+    use r <- puddle.apply(
+      manager,
+      fn(n) {
+        process.sleep(sleep_ms)
+        puddle.keep(n)
+      },
+      timeout,
+    )
+    r
+  })
+}
+
 pub fn parallel_test() {
   let manager =
     puddle.new(fn() {
@@ -302,29 +316,9 @@ pub fn pool_exhaustion_and_recovery_test() {
     |> should.be_ok
 
   let t1 =
-    task_async(fn() {
-      use r <- puddle.apply(
-        manager,
-        fn(n) {
-          process.sleep(500)
-          puddle.keep(n)
-        },
-        2000,
-      )
-      r
-    })
+    hold_resource(manager, 500, 2000)
   let t2 =
-    task_async(fn() {
-      use r <- puddle.apply(
-        manager,
-        fn(n) {
-          process.sleep(500)
-          puddle.keep(n)
-        },
-        2000,
-      )
-      r
-    })
+    hold_resource(manager, 500, 2000)
 
   process.sleep(50)
 
@@ -416,18 +410,7 @@ pub fn shutdown_test() {
     |> puddle.start(5000)
     |> should.be_ok
 
-  let _busy_task =
-    task_async(fn() {
-      use r <- puddle.apply(
-        manager,
-        fn(resource) {
-          process.sleep(300)
-          puddle.keep(resource)
-        },
-        5000,
-      )
-      r
-    })
+  let _busy_task = hold_resource(manager, 300, 5000)
 
   process.sleep(50)
 
@@ -628,41 +611,11 @@ pub fn lazy_creation_grows_on_demand_test() {
 
   // Hold 3 resources simultaneously — all created on demand
   let t1 =
-    task_async(fn() {
-      use r <- puddle.apply(
-        manager,
-        fn(n) {
-          process.sleep(500)
-          puddle.keep(n)
-        },
-        2000,
-      )
-      r
-    })
+    hold_resource(manager, 500, 2000)
   let t2 =
-    task_async(fn() {
-      use r <- puddle.apply(
-        manager,
-        fn(n) {
-          process.sleep(500)
-          puddle.keep(n)
-        },
-        2000,
-      )
-      r
-    })
+    hold_resource(manager, 500, 2000)
   let t3 =
-    task_async(fn() {
-      use r <- puddle.apply(
-        manager,
-        fn(n) {
-          process.sleep(500)
-          puddle.keep(n)
-        },
-        2000,
-      )
-      r
-    })
+    hold_resource(manager, 500, 2000)
 
   // Small delay, then 4th should fail (pool at max capacity)
   process.sleep(50)
@@ -736,17 +689,7 @@ pub fn apply_blocking_test() {
 
   // Hold the single resource for 300ms
   let t1 =
-    task_async(fn() {
-      use r <- puddle.apply(
-        manager,
-        fn(n) {
-          process.sleep(300)
-          puddle.keep(n)
-        },
-        2000,
-      )
-      r
-    })
+    hold_resource(manager, 300, 2000)
 
   process.sleep(50)
 
@@ -788,17 +731,7 @@ pub fn apply_blocking_multiple_waiters_test() {
 
   // Hold the resource
   let t1 =
-    task_async(fn() {
-      use r <- puddle.apply(
-        manager,
-        fn(n) {
-          process.sleep(400)
-          puddle.keep(n)
-        },
-        2000,
-      )
-      r
-    })
+    hold_resource(manager, 400, 2000)
 
   process.sleep(50)
 
@@ -853,17 +786,7 @@ pub fn pool_status_full_test() {
 
   // Hold the resource
   let _t =
-    task_async(fn() {
-      use r <- puddle.apply(
-        manager,
-        fn(n) {
-          process.sleep(500)
-          puddle.keep(n)
-        },
-        2000,
-      )
-      r
-    })
+    hold_resource(manager, 500, 2000)
 
   process.sleep(50)
 
@@ -883,17 +806,7 @@ pub fn pool_status_overloaded_test() {
 
   // Hold the resource
   let _t1 =
-    task_async(fn() {
-      use r <- puddle.apply(
-        manager,
-        fn(n) {
-          process.sleep(800)
-          puddle.keep(n)
-        },
-        2000,
-      )
-      r
-    })
+    hold_resource(manager, 800, 2000)
 
   process.sleep(50)
 
@@ -914,9 +827,12 @@ pub fn pool_status_overloaded_test() {
 }
 
 pub fn supervised_pool_test() {
+  let pool_name = process.new_name("test_supervised_pool")
+
   let child_spec =
     puddle.new(fn() { Ok(42) })
     |> puddle.size(2)
+    |> puddle.name(pool_name)
     |> puddle.supervised(2000)
 
   let assert Ok(_supervisor) =
@@ -924,11 +840,18 @@ pub fn supervised_pool_test() {
     |> static_supervisor.add(child_spec)
     |> static_supervisor.start
 
-  // Give the supervisor time to start the pool
   process.sleep(100)
-  // The pool is running under supervision — we can't easily get the subject
-  // without a name, so this test just verifies the supervisor starts
-  // successfully with the pool child spec
+
+  let named = process.named_subject(pool_name)
+  let r1 = {
+    use r <- puddle.apply(named, fn(n) { puddle.keep(n) }, 1000)
+    r
+  }
+  r1
+  |> should.be_ok
+  |> should.equal(42)
+
+  puddle.shutdown(named)
 }
 
 pub fn named_pool_test() {
@@ -997,17 +920,7 @@ pub fn lazy_with_blocking_test() {
 
   // Hold one lazily-created resource
   let t1 =
-    task_async(fn() {
-      use r <- puddle.apply(
-        manager,
-        fn(n) {
-          process.sleep(300)
-          puddle.keep(n)
-        },
-        2000,
-      )
-      r
-    })
+    hold_resource(manager, 300, 2000)
 
   process.sleep(50)
 
@@ -1031,17 +944,7 @@ pub fn waiter_crash_while_queued_test() {
 
   // Hold the only resource for a while
   let t1 =
-    task_async(fn() {
-      use r <- puddle.apply(
-        manager,
-        fn(n) {
-          process.sleep(500)
-          puddle.keep(n)
-        },
-        2000,
-      )
-      r
-    })
+    hold_resource(manager, 500, 2000)
 
   process.sleep(50)
 
@@ -1106,17 +1009,7 @@ pub fn resource_creation_failure_during_queue_drain_test() {
 
   // Hold the resource and queue a blocking waiter
   let t1 =
-    task_async(fn() {
-      use r <- puddle.apply(
-        manager,
-        fn(n) {
-          process.sleep(400)
-          puddle.keep(n)
-        },
-        2000,
-      )
-      r
-    })
+    hold_resource(manager, 400, 2000)
 
   process.sleep(50)
 
@@ -1137,4 +1030,83 @@ pub fn resource_creation_failure_during_queue_drain_test() {
   // The pool is degraded but the manager is still alive
   let s = puddle.status(manager, 1000)
   s.size |> should.equal(1)
+}
+
+pub fn pool_status_lazy_ready_test() {
+  let manager =
+    puddle.new(fn() { Ok(1) })
+    |> puddle.size(10)
+    |> puddle.creation_strategy(puddle.Lazy)
+    |> puddle.start(2000)
+    |> should.be_ok
+
+  let s = puddle.status(manager, 1000)
+  s.state |> should.equal(puddle.Ready)
+  s.size |> should.equal(10)
+  s.available |> should.equal(0)
+  s.busy |> should.equal(0)
+  s.waiting |> should.equal(0)
+}
+
+pub fn discard_fires_on_shutdown_test() {
+  let shutdown_subject = process.new_subject()
+
+  let manager =
+    puddle.new(fn() { Ok(42) })
+    |> puddle.size(1)
+    |> puddle.on_shutdown(fn(_) { process.send(shutdown_subject, True) })
+    |> puddle.start(2000)
+    |> should.be_ok
+
+  let r1 = {
+    use r <- puddle.apply(manager, fn(n) { puddle.discard(n) }, 1000)
+    r
+  }
+  r1
+  |> should.be_ok
+  |> should.equal(42)
+
+  let selector =
+    process.new_selector()
+    |> process.select_map(shutdown_subject, fn(v) { v })
+
+  process.selector_receive(selector, 2000)
+  |> should.be_ok
+  |> should.equal(True)
+}
+
+pub fn shutdown_while_waiters_queued_test() {
+  let manager =
+    puddle.new(fn() { Ok(1) })
+    |> puddle.size(1)
+    |> puddle.start(2000)
+    |> should.be_ok
+
+  let _t1 = hold_resource(manager, 500, 2000)
+
+  process.sleep(50)
+
+  let t2 =
+    task_async(fn() {
+      use r <- puddle.apply_blocking(manager, fn(n) { puddle.keep(n) }, 5000)
+      r
+    })
+
+  let t3 =
+    task_async(fn() {
+      use r <- puddle.apply_blocking(manager, fn(n) { puddle.keep(n) }, 5000)
+      r
+    })
+
+  process.sleep(50)
+
+  puddle.shutdown(manager)
+
+  task_await(t2, 2000)
+  |> should.be_ok
+  |> should.be_error
+
+  task_await(t3, 2000)
+  |> should.be_ok
+  |> should.be_error
 }

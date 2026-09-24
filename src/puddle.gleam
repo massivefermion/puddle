@@ -133,7 +133,7 @@ pub opaque type ManagerMessage(resource_type, result_type) {
           process.Pid,
           process.Subject(ResourceMessage(resource_type, result_type)),
         ),
-        Nil,
+        ApplyError,
       ),
     ),
   )
@@ -145,7 +145,7 @@ pub opaque type ManagerMessage(resource_type, result_type) {
           process.Pid,
           process.Subject(ResourceMessage(resource_type, result_type)),
         ),
-        Nil,
+        ApplyError,
       ),
     ),
   )
@@ -187,7 +187,7 @@ type WaitingEntry(resource_type, result_type) {
           process.Pid,
           process.Subject(ResourceMessage(resource_type, result_type)),
         ),
-        Nil,
+        ApplyError,
       ),
     ),
   )
@@ -369,7 +369,7 @@ fn use_and_return(
     }
     Error(Nil) -> {
       check_in(manager, subject.0)
-      rest(Error(Nil))
+      rest(Error(CheckoutTimeout))
     }
   }
 }
@@ -539,7 +539,7 @@ fn try_lazy_create_and_checkout(
         process.Pid,
         process.Subject(ResourceMessage(resource_type, result_type)),
       ),
-      Nil,
+      ApplyError,
     ),
   ),
 ) {
@@ -567,7 +567,7 @@ fn try_lazy_create_and_checkout(
       |> actor.with_selector(selector)
     }
     Error(Nil) -> {
-      actor.send(client, Error(Nil))
+      actor.send(client, Error(NoResourcesAvailable))
       actor.continue(puddle)
     }
   }
@@ -588,6 +588,51 @@ fn remove_waiting_by_pid(
       }
     })
   Puddle(..puddle, waiting: waiting)
+}
+
+fn has_lazy_capacity(puddle: Puddle(resource_type, result_type)) -> Bool {
+  puddle.creation_strategy == Lazy && puddle.pool_count < puddle.pool_size
+}
+
+fn checkout_idle_worker(
+  puddle: Puddle(resource_type, result_type),
+  worker_pid: process.Pid,
+  user_pid: process.Pid,
+  client: process.Subject(
+    Result(
+      #(
+        process.Pid,
+        process.Subject(ResourceMessage(resource_type, result_type)),
+      ),
+      ApplyError,
+    ),
+  ),
+) {
+  let assert Ok(IdleWorker(worker_monitor, chosen)) =
+    dict.get(puddle.idle, worker_pid)
+  actor.send(client, Ok(#(worker_pid, chosen)))
+  let user_monitor = process.monitor(user_pid)
+
+  let selector =
+    process.select_specific_monitor(
+      puddle.selector,
+      user_monitor,
+      ProcessDown,
+    )
+
+  let puddle = remove_from_idle(puddle, worker_pid)
+  let puddle =
+    move_to_busy(
+      Puddle(..puddle, selector: selector),
+      worker_pid,
+      user_pid,
+      user_monitor,
+      worker_monitor,
+      chosen,
+    )
+
+  actor.continue(puddle)
+  |> actor.with_selector(selector)
 }
 
 // --- Manager message handler ---
@@ -623,7 +668,7 @@ fn handle_manager_message(
 
       list.each(puddle.waiting, fn(entry) {
         process.demonitor_process(entry.user_monitor)
-        actor.send(entry.client, Error(Nil))
+        actor.send(entry.client, Error(PoolShuttingDown))
       })
 
       actor.stop()
@@ -635,7 +680,11 @@ fn handle_manager_message(
       let waiting_count = list.length(puddle.waiting)
       let state = case available, waiting_count {
         0, w if w > 0 -> Overloaded
-        0, _ -> Full
+        0, _ ->
+          case has_lazy_capacity(puddle) {
+            True -> Ready
+            False -> Full
+          }
         _, _ -> Ready
       }
       actor.send(
@@ -681,43 +730,17 @@ fn handle_manager_message(
       case puddle.idle_order {
         [] ->
           case
-            puddle.creation_strategy == Lazy
-            && puddle.pool_count < puddle.pool_size
+            has_lazy_capacity(puddle)
           {
             True -> try_lazy_create_and_checkout(puddle, user_pid, client)
             False -> {
-              actor.send(client, Error(Nil))
+              actor.send(client, Error(NoResourcesAvailable))
               actor.continue(puddle)
             }
           }
 
-        [worker_pid, ..] -> {
-          let assert Ok(IdleWorker(worker_monitor, chosen)) =
-            dict.get(puddle.idle, worker_pid)
-          actor.send(client, Ok(#(worker_pid, chosen)))
-          let user_monitor = process.monitor(user_pid)
-
-          let selector =
-            process.select_specific_monitor(
-              puddle.selector,
-              user_monitor,
-              ProcessDown,
-            )
-
-          let puddle = remove_from_idle(puddle, worker_pid)
-          let puddle =
-            move_to_busy(
-              Puddle(..puddle, selector: selector),
-              worker_pid,
-              user_pid,
-              user_monitor,
-              worker_monitor,
-              chosen,
-            )
-
-          actor.continue(puddle)
-          |> actor.with_selector(selector)
-        }
+        [worker_pid, ..] ->
+          checkout_idle_worker(puddle, worker_pid, user_pid, client)
       }
     }
 
@@ -725,8 +748,7 @@ fn handle_manager_message(
       case puddle.idle_order {
         [] ->
           case
-            puddle.creation_strategy == Lazy
-            && puddle.pool_count < puddle.pool_size
+            has_lazy_capacity(puddle)
           {
             True -> try_lazy_create_and_checkout(puddle, user_pid, client)
             False -> {
@@ -750,33 +772,8 @@ fn handle_manager_message(
             }
           }
 
-        [worker_pid, ..] -> {
-          let assert Ok(IdleWorker(worker_monitor, chosen)) =
-            dict.get(puddle.idle, worker_pid)
-          actor.send(client, Ok(#(worker_pid, chosen)))
-          let user_monitor = process.monitor(user_pid)
-
-          let selector =
-            process.select_specific_monitor(
-              puddle.selector,
-              user_monitor,
-              ProcessDown,
-            )
-
-          let puddle = remove_from_idle(puddle, worker_pid)
-          let puddle =
-            move_to_busy(
-              Puddle(..puddle, selector: selector),
-              worker_pid,
-              user_pid,
-              user_monitor,
-              worker_monitor,
-              chosen,
-            )
-
-          actor.continue(puddle)
-          |> actor.with_selector(selector)
-        }
+        [worker_pid, ..] ->
+          checkout_idle_worker(puddle, worker_pid, user_pid, client)
       }
     }
 
@@ -833,16 +830,8 @@ fn handle_resource_message(
   case msg {
     ResourceUsage(fun, client) -> {
       let next = fun(resource)
-      case next {
-        Keep(value) -> {
-          actor.send(client, Ok(Keep(value)))
-          actor.continue(resource)
-        }
-        Discard(value) -> {
-          actor.send(client, Ok(Discard(value)))
-          actor.continue(resource)
-        }
-      }
+      actor.send(client, Ok(next))
+      actor.continue(resource)
     }
 
     ResourceShutdown(shutdown_fn) -> {

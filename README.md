@@ -28,27 +28,25 @@ and its documentation can be found at <https://hexdocs.pm/puddle>.
 
 ```gleam
 import gleam/int
-import gleam/otp/task
+import gleam/io
 import puddle
 
 pub fn main() {
-  let assert Ok(manager) = puddle.start(4, fn() { Ok(int.random(1024, 8192)) })
+  let assert Ok(manager) = puddle.start(4, fn() { Ok(int.random(8192)) }, 1000)
 
   let fun = fn(n) { n * 2 }
 
-  let t1 =
-    task.async(fn() {
-      use r <- puddle.apply(manager, fun, 32)
-      r
-    })
+  // Use apply directly from the current process
+  let result1 = {
+    use r <- puddle.apply(manager, fun, 1000)
+    r
+  }
+  io.debug(result1)
 
-  let t2 =
-    task.async(fn() {
-      use r <- puddle.apply(manager, fun, 32)
-      r
-    })
-
-  task.await(t1, 32)
-  task.await(t2, 32)
+  let result2 = {
+    use r <- puddle.apply(manager, fun, 1000)
+    r
+  }
+  io.debug(result2)
 }
 ```

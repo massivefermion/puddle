@@ -7,7 +7,7 @@ import gleam/erlang/process
 
 pub opaque type ManagerMessage(resource_type, result_type) {
   CheckIn(process.Pid)
-  ProcessDown(process.ProcessDown)
+  ProcessDown(process.Down)
   ManagerShutdown(fn(resource_type) -> Nil)
   CheckOut(
     process.Pid,
@@ -33,16 +33,16 @@ pub opaque type ResourceMessage(resource_type, result_type) {
 
 type IdleWorker(resource_type, result_type) {
   IdleWorker(
-    monitor: process.ProcessMonitor,
+    monitor: process.Monitor,
     subject: process.Subject(ResourceMessage(resource_type, result_type)),
   )
 }
 
-type BusyWorker(resource_type, result_type) {
-  BusyWorker(
-    pid: process.Pid,
-    user_monitor: process.ProcessMonitor,
-    worker_monitor: process.ProcessMonitor,
+type BusyEntry(resource_type, result_type) {
+  BusyEntry(
+    user_pid: process.Pid,
+    user_monitor: process.Monitor,
+    worker_monitor: process.Monitor,
     subject: process.Subject(ResourceMessage(resource_type, result_type)),
   )
 }
@@ -52,7 +52,11 @@ type Puddle(resource_type, result_type) {
     selector: process.Selector(ManagerMessage(resource_type, result_type)),
     create_resource: fn() -> Result(resource_type, Nil),
     idle: dict.Dict(process.Pid, IdleWorker(resource_type, result_type)),
-    busy: dict.Dict(process.Pid, BusyWorker(resource_type, result_type)),
+    busy_by_worker: dict.Dict(
+      process.Pid,
+      BusyEntry(resource_type, result_type),
+    ),
+    busy_by_user: dict.Dict(process.Pid, process.Pid),
   )
 }
 
@@ -64,52 +68,48 @@ pub fn start(
   process.Subject(ManagerMessage(resource_type, result_type)),
   actor.StartError,
 ) {
-  actor.start_spec(actor.Spec(
-    init: fn() {
-      let selector = process.new_selector()
+  actor.new_with_initialiser(timeout, fn(default_subject) {
+    let selector = process.new_selector()
 
-      case new(size, create_resource) {
-        Ok(subjects) -> {
-          let subjects =
-            subjects
-            |> list.map(fn(subject) {
-              let pid = process.subject_owner(subject)
-              #(pid, process.monitor_process(pid), subject)
-            })
+    case new(size, create_resource) {
+      Ok(subjects) -> {
+        let subjects =
+          subjects
+          |> list.map(fn(subject) {
+            let assert Ok(pid) = process.subject_owner(subject)
+            #(pid, process.monitor(pid), subject)
+          })
 
-          let selector =
-            list.fold(
-              subjects,
+        let selector =
+          list.fold(subjects, selector, fn(selector, subject) {
+            process.select_specific_monitor(
               selector,
-              fn(selector, subject) {
-                process.selecting_process_down(
-                  selector,
-                  subject.1,
-                  ProcessDown(_),
-                )
-              },
+              subject.1,
+              ProcessDown(_),
             )
+          })
 
-          actor.Ready(
-            Puddle(
-              selector,
-              create_resource,
-              idle: list.map(
-                subjects,
-                fn(subject) { #(subject.0, IdleWorker(subject.1, subject.2)) },
-              )
-              |> dict.from_list,
-              busy: dict.new(),
-            ),
+        Ok(
+          actor.initialised(Puddle(
             selector,
-          )
-        }
-        Error(Nil) -> actor.Failed("Failed to create resources")
+            create_resource,
+            idle: list.map(subjects, fn(subject) {
+              #(subject.0, IdleWorker(subject.1, subject.2))
+            })
+              |> dict.from_list,
+            busy_by_worker: dict.new(),
+            busy_by_user: dict.new(),
+          ))
+          |> actor.selecting(selector)
+          |> actor.returning(default_subject),
+        )
       }
-    },
-    init_timeout: timeout,
-    loop: handle_manager_message,
-  ))
+      Error(Nil) -> Error("Failed to create resources")
+    }
+  })
+  |> actor.on_message(handle_manager_message)
+  |> actor.start
+  |> result.map(fn(started) { started.data })
 }
 
 /// checks-out a resource, applies the function and then checks-in the resource
@@ -119,21 +119,17 @@ pub fn apply(
   timeout: Int,
   rest,
 ) {
-  use subject <- result.then(
-    check_out(manager, timeout)
-    |> result.replace_error(Nil)
-    |> result.flatten,
-  )
+  use subject <- result.try(check_out(manager, timeout))
 
   let mine = process.new_subject()
   utilize(subject.1, fun, mine)
 
   let selector =
-    process.selecting(process.new_selector(), mine, function.identity)
+    process.select_map(process.new_selector(), mine, function.identity)
 
   let result =
     selector
-    |> process.select(timeout)
+    |> process.selector_receive(timeout)
     |> result.flatten
 
   check_in(manager, subject.0)
@@ -148,7 +144,7 @@ fn check_out(
   manager: process.Subject(ManagerMessage(resource_type, result_type)),
   timeout: Int,
 ) {
-  process.try_call(manager, CheckOut(process.self(), _), timeout)
+  process.call(manager, timeout, CheckOut(process.self(), _))
 }
 
 fn utilize(
@@ -167,81 +163,163 @@ fn check_in(
 }
 
 fn new(size: Int, create_resource: fn() -> Result(resource_type, Nil)) {
-  list.repeat("", size)
+  list.repeat(Nil, size)
   |> list.try_map(fn(_) {
     case create_resource() {
       Ok(initial_state) -> {
-        actor.start(initial_state, handle_resource_message)
-        |> result.nil_error()
+        actor.new(initial_state)
+        |> actor.on_message(handle_resource_message)
+        |> actor.start
+        |> result.map(fn(started) { started.data })
+        |> result.replace_error(Nil)
       }
       Error(Nil) -> Error(Nil)
     }
   })
 }
 
-fn handle_manager_message(
-  msg: ManagerMessage(resource_type, result_type),
+fn move_to_idle(
   puddle: Puddle(resource_type, result_type),
+  worker_pid: process.Pid,
+  worker_monitor: process.Monitor,
+  subject: process.Subject(ResourceMessage(resource_type, result_type)),
+) -> Puddle(resource_type, result_type) {
+  Puddle(
+    ..puddle,
+    idle: dict.insert(
+      puddle.idle,
+      worker_pid,
+      IdleWorker(worker_monitor, subject),
+    ),
+  )
+}
+
+fn move_to_busy(
+  puddle: Puddle(resource_type, result_type),
+  worker_pid: process.Pid,
+  user_pid: process.Pid,
+  user_monitor: process.Monitor,
+  worker_monitor: process.Monitor,
+  subject: process.Subject(ResourceMessage(resource_type, result_type)),
+) -> Puddle(resource_type, result_type) {
+  Puddle(
+    ..puddle,
+    busy_by_worker: dict.insert(
+      puddle.busy_by_worker,
+      worker_pid,
+      BusyEntry(user_pid, user_monitor, worker_monitor, subject),
+    ),
+    busy_by_user: dict.insert(puddle.busy_by_user, user_pid, worker_pid),
+  )
+}
+
+fn replace_crashed_worker(
+  puddle: Puddle(resource_type, result_type),
+  idle: dict.Dict(process.Pid, IdleWorker(resource_type, result_type)),
+) {
+  case puddle.create_resource() {
+    Ok(initial_state) -> {
+      case
+        actor.new(initial_state)
+        |> actor.on_message(handle_resource_message)
+        |> actor.start
+      {
+        Ok(started) -> {
+          let subject = started.data
+          let assert Ok(worker_pid) = process.subject_owner(subject)
+          let worker_monitor = process.monitor(worker_pid)
+
+          let selector =
+            process.select_specific_monitor(
+              puddle.selector,
+              worker_monitor,
+              ProcessDown(_),
+            )
+
+          actor.continue(Puddle(
+            selector,
+            puddle.create_resource,
+            idle: dict.insert(
+              idle,
+              worker_pid,
+              IdleWorker(worker_monitor, subject),
+            ),
+            busy_by_worker: puddle.busy_by_worker,
+            busy_by_user: puddle.busy_by_user,
+          ))
+          |> actor.with_selector(selector)
+        }
+        Error(_) ->
+          actor.stop_abnormal("Unable to substitute crashed worker")
+      }
+    }
+
+    Error(Nil) ->
+      actor.stop_abnormal("Unable to substitute crashed worker")
+  }
+}
+
+fn handle_manager_message(
+  puddle: Puddle(resource_type, result_type),
+  msg: ManagerMessage(resource_type, result_type),
 ) {
   case msg {
     ManagerShutdown(shutdown_resource) -> {
       list.each(
         puddle.idle
-        |> dict.to_list
-        |> list.map(fn(subject) {
-          case subject.1 {
-            IdleWorker(monitor, subject) -> {
-              process.demonitor_process(monitor)
-              subject
+          |> dict.to_list
+          |> list.map(fn(entry) {
+            case entry.1 {
+              IdleWorker(monitor, subject) -> {
+                process.demonitor_process(monitor)
+                subject
+              }
             }
-          }
-        }),
+          }),
         process.send(_, ResourceShutdown(shutdown_resource)),
       )
 
       list.each(
-        puddle.busy
-        |> dict.to_list
-        |> list.map(fn(subject) {
-          case subject.1 {
-            BusyWorker(_, user_monitor, worker_monitor, subject) -> {
-              process.demonitor_process(user_monitor)
-              process.demonitor_process(worker_monitor)
-              subject
+        puddle.busy_by_worker
+          |> dict.to_list
+          |> list.map(fn(entry) {
+            case entry.1 {
+              BusyEntry(_user_pid, user_monitor, worker_monitor, subject) -> {
+                process.demonitor_process(user_monitor)
+                process.demonitor_process(worker_monitor)
+                subject
+              }
             }
-          }
-        }),
+          }),
         process.send(_, ResourceShutdown(shutdown_resource)),
       )
 
-      actor.Stop(process.Normal)
+      actor.stop()
     }
-    CheckIn(pid) -> {
-      case dict.get(puddle.busy, pid) {
-        Ok(BusyWorker(pid, user_monitor, worker_monitor, subject)) -> {
+
+    CheckIn(worker_pid) -> {
+      case dict.get(puddle.busy_by_worker, worker_pid) {
+        Ok(BusyEntry(user_pid, user_monitor, worker_monitor, subject)) -> {
           process.demonitor_process(user_monitor)
-          actor.continue(Puddle(
-            puddle.selector,
-            puddle.create_resource,
-            idle: dict.insert(
-              puddle.idle,
-              pid,
-              IdleWorker(worker_monitor, subject),
-            ),
-            busy: dict.drop(puddle.busy, [pid]),
+          let puddle =
+            Puddle(
+              ..puddle,
+              busy_by_worker: dict.drop(puddle.busy_by_worker, [worker_pid]),
+              busy_by_user: dict.drop(puddle.busy_by_user, [user_pid]),
+            )
+          actor.continue(move_to_idle(
+            puddle,
+            worker_pid,
+            worker_monitor,
+            subject,
           ))
         }
 
-        Error(Nil) ->
-          actor.continue(Puddle(
-            puddle.selector,
-            puddle.create_resource,
-            idle: puddle.idle,
-            busy: puddle.busy,
-          ))
+        Error(Nil) -> actor.continue(puddle)
       }
     }
-    CheckOut(pid, client) -> {
+
+    CheckOut(user_pid, client) -> {
       case dict.to_list(puddle.idle) {
         [] -> {
           actor.send(client, Error(Nil))
@@ -250,104 +328,93 @@ fn handle_manager_message(
 
         [#(worker_pid, IdleWorker(worker_monitor, chosen)), ..new_idle] -> {
           actor.send(client, Ok(#(worker_pid, chosen)))
-          let user_monitor = process.monitor_process(pid)
-
-          let new_busy =
-            dict.insert(
-              puddle.busy,
-              pid,
-              BusyWorker(worker_pid, user_monitor, worker_monitor, chosen),
-            )
+          let user_monitor = process.monitor(user_pid)
 
           let selector =
-            process.selecting_process_down(
+            process.select_specific_monitor(
               puddle.selector,
               user_monitor,
               ProcessDown(_),
             )
 
-          actor.continue(Puddle(
-            selector,
-            puddle.create_resource,
-            idle: dict.from_list(new_idle),
-            busy: new_busy,
-          ))
+          let puddle =
+            move_to_busy(
+              Puddle(..puddle, selector: selector, idle: dict.from_list(new_idle)),
+              worker_pid,
+              user_pid,
+              user_monitor,
+              worker_monitor,
+              chosen,
+            )
+
+          actor.continue(puddle)
           |> actor.with_selector(selector)
         }
       }
     }
 
-    ProcessDown(process.ProcessDown(pid, _)) -> {
-      case dict.get(puddle.idle, pid) {
+    ProcessDown(process.ProcessDown(_, down_pid, _)) -> {
+      // Case 1: idle worker crashed
+      case dict.get(puddle.idle, down_pid) {
         Ok(_) -> {
-          let idle = dict.drop(puddle.idle, [pid])
-
-          case puddle.create_resource() {
-            Ok(initial_state) -> {
-              case actor.start(initial_state, handle_resource_message) {
-                Ok(subject) -> {
-                  let worker_pid = process.subject_owner(subject)
-                  let worker_monitor = process.monitor_process(worker_pid)
-
-                  let selector =
-                    process.selecting_process_down(
-                      puddle.selector,
-                      worker_monitor,
-                      ProcessDown(_),
-                    )
-
-                  actor.continue(Puddle(
-                    selector,
-                    puddle.create_resource,
-                    dict.insert(
-                      idle,
-                      worker_pid,
-                      IdleWorker(worker_monitor, subject),
-                    ),
-                    puddle.busy,
-                  ))
-                  |> actor.with_selector(selector)
-                }
-                Error(_) ->
-                  actor.Stop(process.Abnormal(
-                    "Unable to substitute crashed worker",
-                  ))
-              }
-            }
-
-            Error(Nil) ->
-              actor.Stop(process.Abnormal("Unable to substitute crashed worker"))
-          }
+          let idle = dict.drop(puddle.idle, [down_pid])
+          replace_crashed_worker(puddle, idle)
         }
 
         Error(Nil) ->
-          case dict.get(puddle.busy, pid) {
-            Ok(BusyWorker(pid, user_monitor, worker_monitor, subject)) -> {
+          // Case 2: busy worker crashed
+          case dict.get(puddle.busy_by_worker, down_pid) {
+            Ok(BusyEntry(user_pid, user_monitor, _worker_monitor, _subject)) -> {
               process.demonitor_process(user_monitor)
-              let idle =
-                dict.insert(
-                  puddle.idle,
-                  pid,
-                  IdleWorker(worker_monitor, subject),
+              let puddle =
+                Puddle(
+                  ..puddle,
+                  busy_by_worker: dict.drop(puddle.busy_by_worker, [down_pid]),
+                  busy_by_user: dict.drop(puddle.busy_by_user, [user_pid]),
                 )
-              let busy = dict.drop(puddle.busy, [pid])
-              actor.continue(Puddle(
-                puddle.selector,
-                puddle.create_resource,
-                idle,
-                busy,
-              ))
+              replace_crashed_worker(puddle, puddle.idle)
             }
-            Error(Nil) -> actor.continue(puddle)
+
+            Error(Nil) ->
+              // Case 3: user process crashed
+              case dict.get(puddle.busy_by_user, down_pid) {
+                Ok(worker_pid) -> {
+                  let assert Ok(BusyEntry(
+                    _user_pid,
+                    user_monitor,
+                    worker_monitor,
+                    subject,
+                  )) = dict.get(puddle.busy_by_worker, worker_pid)
+                  process.demonitor_process(user_monitor)
+                  let puddle =
+                    Puddle(
+                      ..puddle,
+                      busy_by_worker: dict.drop(puddle.busy_by_worker, [
+                        worker_pid,
+                      ]),
+                      busy_by_user: dict.drop(puddle.busy_by_user, [down_pid]),
+                    )
+                  actor.continue(move_to_idle(
+                    puddle,
+                    worker_pid,
+                    worker_monitor,
+                    subject,
+                  ))
+                }
+
+                Error(Nil) -> actor.continue(puddle)
+              }
           }
       }
     }
+
+    ProcessDown(process.PortDown(_, _, _)) -> actor.continue(puddle)
   }
 }
 
 fn handle_resource_message(
-  msg: ResourceMessage(resource_type, result_type),
   resource: resource_type,
+  msg: ResourceMessage(resource_type, result_type),
 ) {
   case msg {
     ResourceUsage(fun, client) -> {
@@ -358,7 +425,7 @@ fn handle_resource_message(
 
     ResourceShutdown(shutdown) -> {
       shutdown(resource)
-      actor.Stop(process.Normal)
+      actor.stop()
     }
   }
 }

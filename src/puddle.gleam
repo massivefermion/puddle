@@ -185,7 +185,7 @@ fn create_single_worker(
 }
 
 fn new(size: Int, create_resource: fn() -> Result(resource_type, Nil)) {
-  list.range(1, size)
+  list.repeat(Nil, size)
   |> list.try_map(fn(_) { create_single_worker(create_resource) })
 }
 

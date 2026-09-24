@@ -424,27 +424,42 @@ pub fn shutdown_test() {
   let shutdown_subject = process.new_subject()
 
   let manager =
-    puddle.start(2, fn() { Ok(42) }, 1000)
+    puddle.start(2, fn() { Ok(42) }, 5000)
     |> should.be_ok
 
-  // Shutdown the pool, recording each resource shutdown via the subject
+  // Check out one resource and keep it busy with a sleep
+  let _busy_task =
+    task_async(fn() {
+      use r <- puddle.apply(
+        manager,
+        fn(resource) {
+          process.sleep(300)
+          resource
+        },
+        5000,
+      )
+      r
+    })
+
+  // Allow the checkout to be processed
+  process.sleep(50)
+
+  // Shutdown while one resource is busy and one is idle
   puddle.shutdown(manager, fn(_resource) {
     process.send(shutdown_subject, True)
   })
 
-  // Wait a bit for shutdown messages to be processed
-  process.sleep(100)
-
-  // Should have received 2 shutdown notifications (one per idle resource)
+  // Wait for all shutdown messages (busy worker finishes its callback first)
   let selector =
     process.new_selector()
     |> process.select_map(shutdown_subject, fn(value) { value })
 
-  process.selector_receive(selector, 500)
+  // Should receive 2 notifications: one for the idle resource, one for the busy
+  process.selector_receive(selector, 2000)
   |> should.be_ok
   |> should.equal(True)
 
-  process.selector_receive(selector, 500)
+  process.selector_receive(selector, 2000)
   |> should.be_ok
   |> should.equal(True)
 }

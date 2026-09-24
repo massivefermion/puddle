@@ -46,6 +46,22 @@ fn task_await(
   }
 }
 
+fn creation_counter_loop(
+  subj: process.Subject(process.Subject(Int)),
+  count: Int,
+) {
+  let sel =
+    process.new_selector()
+    |> process.select_map(subj, fn(reply_to) { reply_to })
+  case process.selector_receive(sel, 60_000) {
+    Ok(reply_to) -> {
+      process.send(reply_to, count)
+      creation_counter_loop(subj, count + 1)
+    }
+    Error(Nil) -> Nil
+  }
+}
+
 fn crash_worker_and_wait(manager, sleep_ms) {
   let crash_task =
     task_async(fn() {
@@ -1004,4 +1020,121 @@ pub fn lazy_with_blocking_test() {
 
   task_await(t1, 2000) |> should.be_ok |> should.be_ok |> should.equal(5)
   task_await(t2, 2000) |> should.be_ok |> should.be_ok |> should.equal(5)
+}
+
+pub fn waiter_crash_while_queued_test() {
+  let manager =
+    puddle.new(fn() { Ok(1) })
+    |> puddle.size(1)
+    |> puddle.start(2000)
+    |> should.be_ok
+
+  // Hold the only resource for a while
+  let t1 =
+    task_async(fn() {
+      use r <- puddle.apply(
+        manager,
+        fn(n) {
+          process.sleep(500)
+          puddle.keep(n)
+        },
+        2000,
+      )
+      r
+    })
+
+  process.sleep(50)
+
+  // Spawn a blocking waiter that will crash before being served
+  let waiter_pid =
+    process.spawn_unlinked(fn() {
+      use _r <- puddle.apply_blocking(manager, fn(n) { puddle.keep(n) }, 5000)
+      Ok(Nil)
+    })
+
+  // Let the waiter enter the queue
+  process.sleep(50)
+
+  // Kill the waiter before the resource becomes available
+  process.kill(waiter_pid)
+  process.sleep(50)
+
+  // Wait for t1 to finish and return its resource
+  task_await(t1, 2000)
+  |> should.be_ok
+  |> should.be_ok
+
+  // Pool should still be functional — the crashed waiter was cleaned up
+  let r = {
+    use r <- puddle.apply(manager, fn(n) { puddle.keep(n) }, 1000)
+    r
+  }
+  r
+  |> should.be_ok
+  |> should.equal(1)
+}
+
+pub fn resource_creation_failure_during_queue_drain_test() {
+  // Create a counter actor that tracks creation calls.
+  // The counter owns its own subject so create_resource (running inside
+  // the manager actor) can call it via process.call.
+  let counter_ready = process.new_subject()
+  process.spawn_unlinked(fn() {
+    let my_subj: process.Subject(process.Subject(Int)) = process.new_subject()
+    process.send(counter_ready, my_subj)
+    creation_counter_loop(my_subj, 0)
+  })
+
+  let counter_sel =
+    process.new_selector()
+    |> process.select_map(counter_ready, fn(v) { v })
+  let assert Ok(counter_subj) = process.selector_receive(counter_sel, 1000)
+
+  // create_resource calls the counter; first call (count=0) succeeds,
+  // all subsequent calls (count>=1) fail.
+  let manager =
+    puddle.new(fn() {
+      let n = process.call(counter_subj, 1000, fn(reply) { reply })
+      case n < 1 {
+        True -> Ok(1)
+        False -> Error(Nil)
+      }
+    })
+    |> puddle.size(1)
+    |> puddle.start(2000)
+    |> should.be_ok
+
+  // Hold the resource and queue a blocking waiter
+  let t1 =
+    task_async(fn() {
+      use r <- puddle.apply(
+        manager,
+        fn(n) {
+          process.sleep(400)
+          puddle.keep(n)
+        },
+        2000,
+      )
+      r
+    })
+
+  process.sleep(50)
+
+  let _t2 =
+    task_async(fn() {
+      use r <- puddle.apply_blocking(manager, fn(n) { puddle.keep(n) }, 3000)
+      r
+    })
+
+  process.sleep(50)
+
+  // Crash the busy worker — replace_crashed_worker will call create_resource
+  // which now returns Error(Nil) (counter >= 1), so pool_count decrements.
+  crash_worker_and_wait(manager, 200)
+
+  let _ = task_await(t1, 3000)
+
+  // The pool is degraded but the manager is still alive
+  let s = puddle.status(manager, 1000)
+  s.size |> should.equal(1)
 }

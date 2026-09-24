@@ -74,28 +74,18 @@ pub fn start(
       |> process.select(default_subject)
 
     case new(size, create_resource) {
-      Ok(subjects) -> {
-        let subjects =
-          subjects
-          |> list.map(fn(subject) {
-            let assert Ok(pid) = process.subject_owner(subject)
-            // Remove the link created by actor.start so worker crashes
-            // don't kill the pool manager. We use monitors instead.
-            process.unlink(pid)
-            #(pid, process.monitor(pid), subject)
-          })
-
+      Ok(workers) -> {
         let selector =
-          list.fold(subjects, selector, fn(selector, subject) {
-            process.select_specific_monitor(selector, subject.1, ProcessDown)
+          list.fold(workers, selector, fn(selector, worker) {
+            process.select_specific_monitor(selector, worker.1, ProcessDown)
           })
 
         Ok(
           actor.initialised(Puddle(
             selector,
             create_resource,
-            idle: list.map(subjects, fn(subject) {
-              #(subject.0, IdleWorker(subject.1, subject.2))
+            idle: list.map(workers, fn(worker) {
+              #(worker.0, IdleWorker(worker.1, worker.2))
             })
               |> dict.from_list,
             busy_by_worker: dict.new(),
@@ -163,20 +153,40 @@ fn check_in(
   process.send(manager, CheckIn(subject_pid))
 }
 
-fn new(size: Int, create_resource: fn() -> Result(resource_type, Nil)) {
-  list.range(1, size)
-  |> list.try_map(fn(_) {
-    case create_resource() {
-      Ok(initial_state) -> {
+fn create_single_worker(
+  create_resource: fn() -> Result(resource_type, Nil),
+) -> Result(
+  #(
+    process.Pid,
+    process.Monitor,
+    process.Subject(ResourceMessage(resource_type, result_type)),
+  ),
+  Nil,
+) {
+  case create_resource() {
+    Ok(initial_state) -> {
+      case
         actor.new(initial_state)
         |> actor.on_message(handle_resource_message)
         |> actor.start
-        |> result.map(fn(started) { started.data })
-        |> result.replace_error(Nil)
+      {
+        Ok(started) -> {
+          let subject = started.data
+          let assert Ok(pid) = process.subject_owner(subject)
+          process.unlink(pid)
+          let monitor = process.monitor(pid)
+          Ok(#(pid, monitor, subject))
+        }
+        Error(_) -> Error(Nil)
       }
-      Error(Nil) -> Error(Nil)
     }
-  })
+    Error(Nil) -> Error(Nil)
+  }
+}
+
+fn new(size: Int, create_resource: fn() -> Result(resource_type, Nil)) {
+  list.range(1, size)
+  |> list.try_map(fn(_) { create_single_worker(create_resource) })
 }
 
 fn move_to_idle(
@@ -230,45 +240,28 @@ fn replace_crashed_worker(
   puddle: Puddle(resource_type, result_type),
   idle: dict.Dict(process.Pid, IdleWorker(resource_type, result_type)),
 ) {
-  case puddle.create_resource() {
-    Ok(initial_state) -> {
-      case
-        actor.new(initial_state)
-        |> actor.on_message(handle_resource_message)
-        |> actor.start
-      {
-        Ok(started) -> {
-          let subject = started.data
-          let assert Ok(worker_pid) = process.subject_owner(subject)
-          // Remove the link created by actor.start so worker crashes
-          // don't kill the pool manager. We use monitors instead.
-          process.unlink(worker_pid)
-          let worker_monitor = process.monitor(worker_pid)
+  case create_single_worker(puddle.create_resource) {
+    Ok(#(worker_pid, worker_monitor, subject)) -> {
+      let selector =
+        process.select_specific_monitor(
+          puddle.selector,
+          worker_monitor,
+          ProcessDown,
+        )
 
-          let selector =
-            process.select_specific_monitor(
-              puddle.selector,
-              worker_monitor,
-              ProcessDown,
-            )
-
-          actor.continue(Puddle(
-            selector,
-            puddle.create_resource,
-            idle: dict.insert(
-              idle,
-              worker_pid,
-              IdleWorker(worker_monitor, subject),
-            ),
-            busy_by_worker: puddle.busy_by_worker,
-            busy_by_user: puddle.busy_by_user,
-          ))
+      actor.continue(Puddle(
+        selector,
+        puddle.create_resource,
+        idle: dict.insert(
+          idle,
+          worker_pid,
+          IdleWorker(worker_monitor, subject),
+        ),
+        busy_by_worker: puddle.busy_by_worker,
+        busy_by_user: puddle.busy_by_user,
+      ))
           |> actor.with_selector(selector)
         }
-        Error(_) -> actor.stop_abnormal("Unable to substitute crashed worker")
-      }
-    }
-
     Error(Nil) -> actor.stop_abnormal("Unable to substitute crashed worker")
   }
 }

@@ -50,9 +50,7 @@ fn crash_worker_and_wait(manager, sleep_ms) {
     task_async(fn() {
       use r <- puddle.apply(
         manager,
-        fn(_) {
-          let assert 2 = 4
-        },
+        fn(_) { panic as "intentional worker crash" },
         200,
       )
       r
@@ -67,14 +65,12 @@ fn crash_worker_and_wait(manager, sleep_ms) {
 
 pub fn parallel_test() {
   let manager =
-    puddle.start(
-      3,
-      fn() {
-        int.random(8192)
-        |> Ok
-      },
-      32,
-    )
+    puddle.new(fn() {
+      int.random(8192)
+      |> Ok
+    })
+    |> puddle.size(3)
+    |> puddle.start(32)
     |> should.be_ok
 
   let fun = fn(n) {
@@ -82,7 +78,7 @@ pub fn parallel_test() {
     let _ = simplifile.append(to: test_output, contents: n_str <> " ")
     let _ = simplifile.append(to: test_output, contents: n_str <> " ")
     let _ = simplifile.append(to: test_output, contents: n_str <> " ")
-    n_str
+    puddle.keep(n_str)
   }
 
   let t1 =
@@ -160,8 +156,6 @@ pub fn parallel_test() {
       }
     })
 
-  // we could use `list.all`, which is stronger, but then the test would only almost always succeed!
-  // but this is already enough to establish that `puddle` is able to run tasks in parallel
   chains
   |> list.any(fn(chain) { list.length(chain) < 3 })
   |> should.be_true
@@ -171,14 +165,16 @@ pub fn parallel_test() {
 
 pub fn worker_crash_test() {
   let manager =
-    puddle.start(1, fn() { Ok(8) }, 1000)
+    puddle.new(fn() { Ok(8) })
+    |> puddle.size(1)
+    |> puddle.start(1000)
     |> should.be_ok
 
   crash_worker_and_wait(manager, 100)
 
   let t =
     task_async(fn() {
-      use r <- puddle.apply(manager, fn(n) { n }, 1000)
+      use r <- puddle.apply(manager, fn(n) { puddle.keep(n) }, 1000)
       r
     })
 
@@ -190,28 +186,25 @@ pub fn worker_crash_test() {
 
 pub fn user_crash_test() {
   let manager =
-    puddle.start(1, fn() { Ok(8) }, 1000)
+    puddle.new(fn() { Ok(8) })
+    |> puddle.size(1)
+    |> puddle.start(1000)
     |> should.be_ok
 
-  // Spawn task where the user function succeeds but the caller panics
-  // after apply returns. The resource is checked back in before the panic.
   let crash_task =
     task_async(fn() {
-      use _r <- puddle.apply(manager, fn(n) { n }, 1000)
+      use _r <- puddle.apply(manager, fn(n) { puddle.keep(n) }, 1000)
       panic
     })
 
-  // Wait for the crash task: the process panics so task_await detects it
-  // via the monitor and returns Error
   task_await(crash_task, 1000)
   |> should.be_error
 
-  // Give the pool time to process the user's ProcessDown
   process.sleep(100)
 
   let t =
     task_async(fn() {
-      use r <- puddle.apply(manager, fn(n) { n }, 1000)
+      use r <- puddle.apply(manager, fn(n) { puddle.keep(n) }, 1000)
       r
     })
 
@@ -223,13 +216,13 @@ pub fn user_crash_test() {
 
 pub fn explicit_checkin_test() {
   let manager =
-    puddle.start(1, fn() { Ok(42) }, 1000)
+    puddle.new(fn() { Ok(42) })
+    |> puddle.size(1)
+    |> puddle.start(1000)
     |> should.be_ok
 
-  // Apply multiple times from the same process sequentially
-  // Each call checks out and checks back in the resource via explicit check-in
   let r1 = {
-    use r <- puddle.apply(manager, fn(n) { n * 2 }, 1000)
+    use r <- puddle.apply(manager, fn(n) { puddle.keep(n * 2) }, 1000)
     r
   }
   r1
@@ -237,7 +230,7 @@ pub fn explicit_checkin_test() {
   |> should.equal(84)
 
   let r2 = {
-    use r <- puddle.apply(manager, fn(n) { n + 1 }, 1000)
+    use r <- puddle.apply(manager, fn(n) { puddle.keep(n + 1) }, 1000)
     r
   }
   r2
@@ -245,7 +238,7 @@ pub fn explicit_checkin_test() {
   |> should.equal(43)
 
   let r3 = {
-    use r <- puddle.apply(manager, fn(n) { n }, 1000)
+    use r <- puddle.apply(manager, fn(n) { puddle.keep(n) }, 1000)
     r
   }
   r3
@@ -255,20 +248,21 @@ pub fn explicit_checkin_test() {
 
 pub fn worker_crash_while_busy_test() {
   let manager =
-    puddle.start(2, fn() { Ok(7) }, 1000)
+    puddle.new(fn() { Ok(7) })
+    |> puddle.size(2)
+    |> puddle.start(1000)
     |> should.be_ok
 
   crash_worker_and_wait(manager, 200)
 
-  // Check out 2 resources to prove full pool capacity is maintained
   let t1 =
     task_async(fn() {
-      use r <- puddle.apply(manager, fn(n) { n }, 1000)
+      use r <- puddle.apply(manager, fn(n) { puddle.keep(n) }, 1000)
       r
     })
   let t2 =
     task_async(fn() {
-      use r <- puddle.apply(manager, fn(n) { n }, 1000)
+      use r <- puddle.apply(manager, fn(n) { puddle.keep(n) }, 1000)
       r
     })
 
@@ -285,17 +279,18 @@ pub fn worker_crash_while_busy_test() {
 
 pub fn pool_exhaustion_and_recovery_test() {
   let manager =
-    puddle.start(2, fn() { Ok(1) }, 2000)
+    puddle.new(fn() { Ok(1) })
+    |> puddle.size(2)
+    |> puddle.start(2000)
     |> should.be_ok
 
-  // Launch 2 tasks that hold resources for 500ms
   let t1 =
     task_async(fn() {
       use r <- puddle.apply(
         manager,
         fn(n) {
           process.sleep(500)
-          n
+          puddle.keep(n)
         },
         2000,
       )
@@ -307,29 +302,25 @@ pub fn pool_exhaustion_and_recovery_test() {
         manager,
         fn(n) {
           process.sleep(500)
-          n
+          puddle.keep(n)
         },
         2000,
       )
       r
     })
 
-  // Small delay to ensure t1 and t2 have checked out their resources
   process.sleep(50)
 
-  // 3rd task should fail because the pool is exhausted (no idle workers)
   let t3 =
     task_async(fn() {
-      use r <- puddle.apply(manager, fn(n) { n }, 100)
+      use r <- puddle.apply(manager, fn(n) { puddle.keep(n) }, 100)
       r
     })
 
-  // The pool immediately responds with Error when no workers are idle
   task_await(t3, 500)
   |> should.be_ok
   |> should.be_error
 
-  // Wait for the first 2 tasks to complete and return their resources
   task_await(t1, 2000)
   |> should.be_ok
   |> should.be_ok
@@ -338,10 +329,9 @@ pub fn pool_exhaustion_and_recovery_test() {
   |> should.be_ok
   |> should.be_ok
 
-  // Now a checkout should succeed since resources have been returned
   let t4 =
     task_async(fn() {
-      use r <- puddle.apply(manager, fn(n) { n }, 1000)
+      use r <- puddle.apply(manager, fn(n) { puddle.keep(n) }, 1000)
       r
     })
 
@@ -353,13 +343,13 @@ pub fn pool_exhaustion_and_recovery_test() {
 
 pub fn sequential_reuse_test() {
   let manager =
-    puddle.start(1, fn() { Ok(99) }, 1000)
+    puddle.new(fn() { Ok(99) })
+    |> puddle.size(1)
+    |> puddle.start(1000)
     |> should.be_ok
 
-  // Call apply 5 times sequentially from the same process
-  // This proves check-in works correctly for the same process reusing the pool
   let r1 = {
-    use r <- puddle.apply(manager, fn(n) { n }, 1000)
+    use r <- puddle.apply(manager, fn(n) { puddle.keep(n) }, 1000)
     r
   }
   r1
@@ -367,7 +357,7 @@ pub fn sequential_reuse_test() {
   |> should.equal(99)
 
   let r2 = {
-    use r <- puddle.apply(manager, fn(n) { n + 1 }, 1000)
+    use r <- puddle.apply(manager, fn(n) { puddle.keep(n + 1) }, 1000)
     r
   }
   r2
@@ -375,7 +365,7 @@ pub fn sequential_reuse_test() {
   |> should.equal(100)
 
   let r3 = {
-    use r <- puddle.apply(manager, fn(n) { n * 2 }, 1000)
+    use r <- puddle.apply(manager, fn(n) { puddle.keep(n * 2) }, 1000)
     r
   }
   r3
@@ -383,7 +373,7 @@ pub fn sequential_reuse_test() {
   |> should.equal(198)
 
   let r4 = {
-    use r <- puddle.apply(manager, fn(n) { n - 10 }, 1000)
+    use r <- puddle.apply(manager, fn(n) { puddle.keep(n - 10) }, 1000)
     r
   }
   r4
@@ -391,7 +381,7 @@ pub fn sequential_reuse_test() {
   |> should.equal(89)
 
   let r5 = {
-    use r <- puddle.apply(manager, fn(n) { n * n }, 1000)
+    use r <- puddle.apply(manager, fn(n) { puddle.keep(n * n) }, 1000)
     r
   }
   r5
@@ -403,37 +393,35 @@ pub fn shutdown_test() {
   let shutdown_subject = process.new_subject()
 
   let manager =
-    puddle.start(2, fn() { Ok(42) }, 5000)
+    puddle.new(fn() { Ok(42) })
+    |> puddle.size(2)
+    |> puddle.on_shutdown(fn(_resource) {
+      process.send(shutdown_subject, True)
+    })
+    |> puddle.start(5000)
     |> should.be_ok
 
-  // Check out one resource and keep it busy with a sleep
   let _busy_task =
     task_async(fn() {
       use r <- puddle.apply(
         manager,
         fn(resource) {
           process.sleep(300)
-          resource
+          puddle.keep(resource)
         },
         5000,
       )
       r
     })
 
-  // Allow the checkout to be processed
   process.sleep(50)
 
-  // Shutdown while one resource is busy and one is idle
-  puddle.shutdown(manager, fn(_resource) {
-    process.send(shutdown_subject, True)
-  })
+  puddle.shutdown(manager)
 
-  // Wait for all shutdown messages (busy worker finishes its callback first)
   let selector =
     process.new_selector()
     |> process.select_map(shutdown_subject, fn(value) { value })
 
-  // Should receive 2 notifications: one for the idle resource, one for the busy
   process.selector_receive(selector, 2000)
   |> should.be_ok
   |> should.equal(True)

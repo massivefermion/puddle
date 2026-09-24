@@ -252,16 +252,12 @@ fn replace_crashed_worker(
       actor.continue(Puddle(
         selector,
         puddle.create_resource,
-        idle: dict.insert(
-          idle,
-          worker_pid,
-          IdleWorker(worker_monitor, subject),
-        ),
+        idle: dict.insert(idle, worker_pid, IdleWorker(worker_monitor, subject)),
         busy_by_worker: puddle.busy_by_worker,
         busy_by_user: puddle.busy_by_user,
       ))
-          |> actor.with_selector(selector)
-        }
+      |> actor.with_selector(selector)
+    }
     Error(Nil) -> actor.stop_abnormal("Unable to substitute crashed worker")
   }
 }

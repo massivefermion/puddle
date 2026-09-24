@@ -45,6 +45,26 @@ fn task_await(
   }
 }
 
+fn crash_worker_and_wait(manager, sleep_ms) {
+  let crash_task =
+    task_async(fn() {
+      use r <- puddle.apply(
+        manager,
+        fn(_) {
+          let assert 2 = 4
+        },
+        200,
+      )
+      r
+    })
+
+  task_await(crash_task, 1000)
+  |> should.be_ok
+  |> should.be_error
+
+  process.sleep(sleep_ms)
+}
+
 pub fn parallel_test() {
   let manager =
     puddle.start(
@@ -154,28 +174,7 @@ pub fn worker_crash_test() {
     puddle.start(1, fn() { Ok(8) }, 1000)
     |> should.be_ok
 
-  // Spawn task that crashes the worker. The worker dies but the task process
-  // itself completes normally (apply times out waiting for the dead worker's
-  // response and returns Error).
-  let crash_task =
-    task_async(fn() {
-      use r <- puddle.apply(
-        manager,
-        fn(_) {
-          let assert 2 = 4
-        },
-        200,
-      )
-      r
-    })
-
-  // Wait for the crash task to finish (it returns Error after timeout)
-  task_await(crash_task, 1000)
-  |> should.be_ok
-  |> should.be_error
-
-  // Give the pool time to detect the worker crash and replace it
-  process.sleep(100)
+  crash_worker_and_wait(manager, 100)
 
   let t =
     task_async(fn() {
@@ -259,27 +258,7 @@ pub fn worker_crash_while_busy_test() {
     puddle.start(2, fn() { Ok(7) }, 1000)
     |> should.be_ok
 
-  // Crash one worker via a task. The worker process dies but the task
-  // itself completes with Error after apply times out.
-  let crash_task =
-    task_async(fn() {
-      use r <- puddle.apply(
-        manager,
-        fn(_) {
-          let assert 2 = 4
-        },
-        200,
-      )
-      r
-    })
-
-  // Wait for the crash task to complete (returns Error, not a crash)
-  task_await(crash_task, 1000)
-  |> should.be_ok
-  |> should.be_error
-
-  // Give the pool time to detect the crash and replace the worker
-  process.sleep(200)
+  crash_worker_and_wait(manager, 200)
 
   // Check out 2 resources to prove full pool capacity is maintained
   let t1 =

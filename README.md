@@ -1,30 +1,17 @@
-![puddle](https://raw.githubusercontent.com/massivefermion/puddle/main/banner.jpg)
+# puddle
+
+A resource pool manager for Gleam. Manages a fixed pool of reusable resources with automatic crash recovery and backpressure.
 
 [![Package Version](https://img.shields.io/hexpm/v/puddle)](https://hex.pm/packages/puddle)
 [![Hex Docs](https://img.shields.io/badge/hex-docs-ffaff3)](https://hexdocs.pm/puddle/)
 
-# puddle
-
-A resource pool manager for gleam
-
-## <img width=32 src="https://raw.githubusercontent.com/massivefermion/puddle/main/icon.png"> Quick start
-
-```sh
-gleam test  # Run the tests
-gleam shell # Run an Erlang shell
-```
-
-## <img width=32 src="https://raw.githubusercontent.com/massivefermion/puddle/main/icon.png"> Installation
-
-This package can be added to your Gleam project:
+## Installation
 
 ```sh
 gleam add puddle
 ```
 
-and its documentation can be found at <https://hexdocs.pm/puddle>.
-
-## <img width=32 src="https://raw.githubusercontent.com/massivefermion/puddle/main/icon.png"> Usage
+## Quick Start
 
 ### Basic usage
 

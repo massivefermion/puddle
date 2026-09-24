@@ -164,7 +164,7 @@ fn check_in(
 }
 
 fn new(size: Int, create_resource: fn() -> Result(resource_type, Nil)) {
-  list.repeat(Nil, size)
+  list.range(1, size)
   |> list.try_map(fn(_) {
     case create_resource() {
       Ok(initial_state) -> {

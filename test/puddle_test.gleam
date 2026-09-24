@@ -396,9 +396,7 @@ pub fn shutdown_test() {
   let manager =
     puddle.new(fn() { Ok(42) })
     |> puddle.size(2)
-    |> puddle.on_shutdown(fn(_resource) {
-      process.send(shutdown_subject, True)
-    })
+    |> puddle.on_shutdown(fn(_resource) { process.send(shutdown_subject, True) })
     |> puddle.start(5000)
     |> should.be_ok
 
@@ -439,11 +437,12 @@ pub fn lifo_checkout_strategy_test() {
 
   let manager =
     puddle.new(fn() {
-      let id = process.selector_receive(
-        process.new_selector()
-          |> process.select_map(counter, fn(v) { v }),
-        0,
-      )
+      let id =
+        process.selector_receive(
+          process.new_selector()
+            |> process.select_map(counter, fn(v) { v }),
+          0,
+        )
       case id {
         Ok(n) -> Ok(n)
         Error(Nil) -> Ok(0)
@@ -911,7 +910,6 @@ pub fn supervised_pool_test() {
 
   // Give the supervisor time to start the pool
   process.sleep(100)
-
   // The pool is running under supervision — we can't easily get the subject
   // without a name, so this test just verifies the supervisor starts
   // successfully with the pool child spec
@@ -953,9 +951,7 @@ pub fn on_shutdown_callback_test() {
   let manager =
     puddle.new(fn() { Ok(1) })
     |> puddle.size(2)
-    |> puddle.on_shutdown(fn(_) {
-      process.send(shutdown_subject, True)
-    })
+    |> puddle.on_shutdown(fn(_) { process.send(shutdown_subject, True) })
     |> puddle.start(2000)
     |> should.be_ok
 

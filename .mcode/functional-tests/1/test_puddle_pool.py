@@ -12,7 +12,6 @@ The tests validate:
 - User process crash recovery
 - Shutdown with proper cleanup
 """
-import pytest
 from conftest import run_escript
 
 

@@ -4,10 +4,8 @@ import subprocess
 import time
 
 PUDDLE_DIR = os.path.join(os.environ.get("WORKSPACE_DIR", "/l2l/workspace"), "puddle")
-KERL_ACTIVATE = os.path.expanduser("~/.kerl/installs/27.3/activate")
 ESCRIPT_CMD = os.path.expanduser("~/.kerl/installs/27.3/bin/escript")
 SCRIPTS_DIR = os.path.join(os.path.dirname(__file__), "scripts")
-ORIGIN_SCRIPTS_DIR = os.path.join(SCRIPTS_DIR)
 TARGET_SCRIPTS_DIR = os.path.join(SCRIPTS_DIR, "target")
 
 
@@ -37,11 +35,6 @@ def run_escript(name, scripts_dir=None, timeout=60):
     )
     result.duration_ms = (time.time() - start) * 1000
     return result
-
-
-def run_origin_escript(name, timeout=60):
-    """Run an escript from the origin (root) scripts directory."""
-    return run_escript(name, scripts_dir=ORIGIN_SCRIPTS_DIR, timeout=timeout)
 
 
 def run_target_escript(name, timeout=60):

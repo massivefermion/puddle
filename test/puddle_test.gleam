@@ -315,10 +315,8 @@ pub fn pool_exhaustion_and_recovery_test() {
     |> puddle.start(2000)
     |> should.be_ok
 
-  let t1 =
-    hold_resource(manager, 500, 2000)
-  let t2 =
-    hold_resource(manager, 500, 2000)
+  let t1 = hold_resource(manager, 500, 2000)
+  let t2 = hold_resource(manager, 500, 2000)
 
   process.sleep(50)
 
@@ -610,12 +608,9 @@ pub fn lazy_creation_grows_on_demand_test() {
     |> should.be_ok
 
   // Hold 3 resources simultaneously — all created on demand
-  let t1 =
-    hold_resource(manager, 500, 2000)
-  let t2 =
-    hold_resource(manager, 500, 2000)
-  let t3 =
-    hold_resource(manager, 500, 2000)
+  let t1 = hold_resource(manager, 500, 2000)
+  let t2 = hold_resource(manager, 500, 2000)
+  let t3 = hold_resource(manager, 500, 2000)
 
   // Small delay, then 4th should fail (pool at max capacity)
   process.sleep(50)
@@ -688,8 +683,7 @@ pub fn apply_blocking_test() {
     |> should.be_ok
 
   // Hold the single resource for 300ms
-  let t1 =
-    hold_resource(manager, 300, 2000)
+  let t1 = hold_resource(manager, 300, 2000)
 
   process.sleep(50)
 
@@ -730,8 +724,7 @@ pub fn apply_blocking_multiple_waiters_test() {
     |> should.be_ok
 
   // Hold the resource
-  let t1 =
-    hold_resource(manager, 400, 2000)
+  let t1 = hold_resource(manager, 400, 2000)
 
   process.sleep(50)
 
@@ -785,8 +778,7 @@ pub fn pool_status_full_test() {
     |> should.be_ok
 
   // Hold the resource
-  let _t =
-    hold_resource(manager, 500, 2000)
+  let _t = hold_resource(manager, 500, 2000)
 
   process.sleep(50)
 
@@ -805,8 +797,7 @@ pub fn pool_status_overloaded_test() {
     |> should.be_ok
 
   // Hold the resource
-  let _t1 =
-    hold_resource(manager, 800, 2000)
+  let _t1 = hold_resource(manager, 800, 2000)
 
   process.sleep(50)
 
@@ -919,8 +910,7 @@ pub fn lazy_with_blocking_test() {
     |> should.be_ok
 
   // Hold one lazily-created resource
-  let t1 =
-    hold_resource(manager, 300, 2000)
+  let t1 = hold_resource(manager, 300, 2000)
 
   process.sleep(50)
 
@@ -943,8 +933,7 @@ pub fn waiter_crash_while_queued_test() {
     |> should.be_ok
 
   // Hold the only resource for a while
-  let t1 =
-    hold_resource(manager, 500, 2000)
+  let t1 = hold_resource(manager, 500, 2000)
 
   process.sleep(50)
 
@@ -1008,8 +997,7 @@ pub fn resource_creation_failure_during_queue_drain_test() {
     |> should.be_ok
 
   // Hold the resource and queue a blocking waiter
-  let t1 =
-    hold_resource(manager, 400, 2000)
+  let t1 = hold_resource(manager, 400, 2000)
 
   process.sleep(50)
 

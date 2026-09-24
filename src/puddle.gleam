@@ -614,11 +614,7 @@ fn checkout_idle_worker(
   let user_monitor = process.monitor(user_pid)
 
   let selector =
-    process.select_specific_monitor(
-      puddle.selector,
-      user_monitor,
-      ProcessDown,
-    )
+    process.select_specific_monitor(puddle.selector, user_monitor, ProcessDown)
 
   let puddle = remove_from_idle(puddle, worker_pid)
   let puddle =
@@ -729,9 +725,7 @@ fn handle_manager_message(
     CheckOut(user_pid, client) -> {
       case puddle.idle_order {
         [] ->
-          case
-            has_lazy_capacity(puddle)
-          {
+          case has_lazy_capacity(puddle) {
             True -> try_lazy_create_and_checkout(puddle, user_pid, client)
             False -> {
               actor.send(client, Error(NoResourcesAvailable))
@@ -747,9 +741,7 @@ fn handle_manager_message(
     CheckOutBlocking(user_pid, client) -> {
       case puddle.idle_order {
         [] ->
-          case
-            has_lazy_capacity(puddle)
-          {
+          case has_lazy_capacity(puddle) {
             True -> try_lazy_create_and_checkout(puddle, user_pid, client)
             False -> {
               let user_monitor = process.monitor(user_pid)

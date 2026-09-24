@@ -1,9 +1,9 @@
 import gleam/dict
-import gleam/list
-import gleam/result
-import gleam/function
-import gleam/otp/actor
 import gleam/erlang/process
+import gleam/function
+import gleam/list
+import gleam/otp/actor
+import gleam/result
 
 pub opaque type ManagerMessage(resource_type, result_type) {
   CheckIn(process.Pid)
@@ -87,11 +87,7 @@ pub fn start(
 
         let selector =
           list.fold(subjects, selector, fn(selector, subject) {
-            process.select_specific_monitor(
-              selector,
-              subject.1,
-              ProcessDown(_),
-            )
+            process.select_specific_monitor(selector, subject.1, ProcessDown)
           })
 
         Ok(
@@ -241,7 +237,7 @@ fn replace_crashed_worker(
             process.select_specific_monitor(
               puddle.selector,
               worker_monitor,
-              ProcessDown(_),
+              ProcessDown,
             )
 
           actor.continue(Puddle(
@@ -257,13 +253,11 @@ fn replace_crashed_worker(
           ))
           |> actor.with_selector(selector)
         }
-        Error(_) ->
-          actor.stop_abnormal("Unable to substitute crashed worker")
+        Error(_) -> actor.stop_abnormal("Unable to substitute crashed worker")
       }
     }
 
-    Error(Nil) ->
-      actor.stop_abnormal("Unable to substitute crashed worker")
+    Error(Nil) -> actor.stop_abnormal("Unable to substitute crashed worker")
   }
 }
 
@@ -342,12 +336,16 @@ fn handle_manager_message(
             process.select_specific_monitor(
               puddle.selector,
               user_monitor,
-              ProcessDown(_),
+              ProcessDown,
             )
 
           let puddle =
             move_to_busy(
-              Puddle(..puddle, selector: selector, idle: dict.from_list(new_idle)),
+              Puddle(
+                ..puddle,
+                selector: selector,
+                idle: dict.from_list(new_idle),
+              ),
               worker_pid,
               user_pid,
               user_monitor,

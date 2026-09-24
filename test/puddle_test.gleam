@@ -1,10 +1,10 @@
+import gleam/erlang/process
 import gleam/int
 import gleam/list
 import gleam/string
-import puddle
 import gleeunit
 import gleeunit/should
-import gleam/erlang/process
+import puddle
 import simplifile
 
 pub fn main() {
@@ -15,10 +15,11 @@ pub const test_output = "test_output"
 
 fn task_async(fun: fn() -> a) -> #(process.Pid, process.Subject(a)) {
   let subject = process.new_subject()
-  let pid = process.spawn_unlinked(fn() {
-    let result = fun()
-    process.send(subject, result)
-  })
+  let pid =
+    process.spawn_unlinked(fn() {
+      let result = fun()
+      process.send(subject, result)
+    })
   #(pid, subject)
 }
 
@@ -128,19 +129,16 @@ pub fn parallel_test() {
 
   let #(chains, _, _) =
     split_string
-    |> list.fold(
-      #([], [], first),
-      fn(acc, n_str) {
-        case n_str == acc.2 {
-          True -> #(acc.0, list.prepend(acc.1, n_str), n_str)
-          False ->
-            case acc.1 {
-              [] -> #(acc.0, [n_str], n_str)
-              _ -> #(list.prepend(acc.0, acc.1), [n_str], n_str)
-            }
-        }
-      },
-    )
+    |> list.fold(#([], [], first), fn(acc, n_str) {
+      case n_str == acc.2 {
+        True -> #(acc.0, list.prepend(acc.1, n_str), n_str)
+        False ->
+          case acc.1 {
+            [] -> #(acc.0, [n_str], n_str)
+            _ -> #(list.prepend(acc.0, acc.1), [n_str], n_str)
+          }
+      }
+    })
 
   // we could use `list.all`, which is stronger, but then the test would only almost always succeed!
   // but this is already enough to establish that `puddle` is able to run tasks in parallel
